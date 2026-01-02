@@ -643,10 +643,10 @@ export default tool({
         type: "string",
         description: "Python code to execute (required for 'execute' action)",
       },
-      description: {
+      executionLabel: {
         type: "string",
         description:
-          "Human-readable description of what this code execution does. " +
+          "Human-readable label for this code execution. " +
           "Displayed in UI to help users understand the research progress. " +
           "Examples: 'Load and profile dataset', 'Train XGBoost model', 'Generate correlation heatmap'",
       },
@@ -700,7 +700,7 @@ export default tool({
     action: "execute" | "interrupt" | "reset" | "get_state";
     researchSessionID: string;
     code?: string;
-    description?: string;
+    executionLabel?: string;
     executionTimeout?: number;
     queueTimeout?: number;
     projectDir?: string;
@@ -713,7 +713,7 @@ export default tool({
       action,
       researchSessionID,
       code,
-      description,
+      executionLabel,
       executionTimeout = DEFAULT_EXECUTION_TIMEOUT_MS,
       queueTimeout = DEFAULT_QUEUE_TIMEOUT_MS,
       notebookPath,
@@ -769,8 +769,8 @@ export default tool({
             });
           }
 
-          if (description) {
-            console.log(`▶ ${description}`);
+          if (executionLabel) {
+            console.log(`▶ ${executionLabel}`);
           }
 
           const executeAndCapture = async (result: ExecuteResult): Promise<string> => {
