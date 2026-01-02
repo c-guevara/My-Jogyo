@@ -655,22 +655,8 @@ function createDefaultConfig(projectName?: string): GyoshuConfig {
 }
 
 /**
- * Check for legacy sessions and emit warning if found.
- * Called during initialization to notify users about migration.
- */
-function emitLegacyWarning(): void {
-  if (hasLegacySessions()) {
-    console.warn(
-      "[Gyoshu] Legacy sessions found at ~/.gyoshu/sessions/\n" +
-        "         Run /gyoshu migrate to move them to notebooks/."
-    );
-  }
-}
-
-/**
  * Ensure Gyoshu is initialized for the current project.
  * Creates the gyoshu directory and config.json if they don't exist.
- * Emits warning if legacy sessions are detected.
  *
  * @param projectName - Optional project name to store in config
  * @returns The Gyoshu config (existing or newly created)
@@ -681,7 +667,6 @@ export function ensureGyoshuInitialized(projectName?: string): GyoshuConfig {
 
   const existingConfig = getConfig();
   if (existingConfig) {
-    emitLegacyWarning();
     return existingConfig;
   }
 
@@ -689,8 +674,6 @@ export function ensureGyoshuInitialized(projectName?: string): GyoshuConfig {
 
   const config = createDefaultConfig(projectName);
   fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
-
-  emitLegacyWarning();
 
   return config;
 }
