@@ -17,8 +17,27 @@ $ARGUMENTS
 
 This command runs in **AUTO mode** - bounded autonomous execution that:
 1. Creates or continues a session targeting the specified goal
-2. Runs a bounded loop: delegate to @jogyo → verify progress → check completion
+2. Runs a bounded loop: delegate to @jogyo → **verify with @baksa** → check completion
 3. Continues until goal is COMPLETED, BLOCKED (needs user input), or budget exhausted
+
+### Adversarial Verification Loop
+
+Every cycle includes mandatory verification by @baksa (the PhD reviewer):
+
+```
+FOR each cycle:
+  1. Delegate task to @jogyo
+  2. Receive completion signal
+  3. CHALLENGE LOOP (max 3 rounds):
+     a. Get snapshot of evidence
+     b. Invoke @baksa to challenge claims
+     c. If trust score >= 80: ACCEPT, continue
+     d. If trust score < 80: REWORK request to @jogyo
+     e. If 3 rounds fail: Mark BLOCKED, report to user
+  4. Increment cycle, continue to next objective
+```
+
+This ensures research quality through systematic skepticism - no claim passes without verification.
 
 ## Default Budgets
 
