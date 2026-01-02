@@ -30,7 +30,7 @@ pytest tests/test_bridge.py::TestParseMarkers
 pytest tests/test_bridge.py::TestParseMarkers::test_simple_marker
 
 # Run with coverage
-pytest --cov=.opencode/bridge --cov-report=term-missing
+pytest --cov=src/bridge --cov-report=term-missing
 ```
 
 ### TypeScript/JavaScript (Bun)
@@ -43,7 +43,7 @@ bun test
 bun test --watch
 
 # Run a specific test file
-bun test .opencode/tool/session-manager.test.ts
+bun test src/tool/session-manager.test.ts
 ```
 
 ### No Build Step Required
@@ -152,7 +152,7 @@ import { durableAtomicWrite, fileExists } from "../lib/atomic-write";
  * @module session-manager
  */
 
-// Import from centralized path resolver (see .opencode/lib/paths.ts)
+// Import from centralized path resolver (see src/lib/paths.ts)
 import { getRuntimeDir, getResearchDir } from "../lib/paths";
 
 /**
@@ -271,27 +271,6 @@ Use this when you have a clear goal and want hands-off execution.
 # Hands-off autonomous research
 /gyoshu-auto cluster wine dataset and identify quality predictors
 ```
-
-### Migration from Old Commands
-
-The following commands are **deprecated** but still work with a warning:
-
-| Old Command | New Equivalent |
-|-------------|----------------|
-| `/gyoshu-run` | `/gyoshu <goal>` |
-| `/gyoshu-plan <goal>` | `/gyoshu plan <goal>` |
-| `/gyoshu-continue` | `/gyoshu continue [id]` |
-| `/gyoshu-interactive <goal>` | `/gyoshu <goal>` |
-| `/gyoshu-repl <query>` | `/gyoshu repl <query>` |
-| `/gyoshu-list` | `/gyoshu list` |
-| `/gyoshu-search <query>` | `/gyoshu search <query>` |
-| `/gyoshu-report` | `/gyoshu report` |
-| `/gyoshu-replay <sid>` | `/gyoshu replay <sid>` |
-| `/gyoshu-unlock <sid>` | `/gyoshu unlock <sid>` |
-| `/gyoshu-migrate` | `/gyoshu migrate` |
-| `/gyoshu-abort` | `/gyoshu abort` |
-
-Old commands will show: `⚠️ Deprecated: use /gyoshu <subcommand> instead`
 
 ## Structured Output Markers
 
@@ -428,7 +407,7 @@ Gyoshu/
 │       ├── report.md             # Generated research report
 │       └── report.pdf            # PDF export (if converter available)
 │
-├── .opencode/                    # OpenCode extension
+├── src/                          # OpenCode extension source
 │   ├── agent/                    # Agent definitions
 │   ├── command/                  # Slash commands
 │   ├── tool/                     # Tool implementations
@@ -501,18 +480,18 @@ Cells are tagged with `gyoshu-*` markers in metadata to structure the research:
 
 | File | Purpose |
 |------|---------|
-| `.opencode/bridge/gyoshu_bridge.py` | JSON-RPC Python execution bridge |
-| `.opencode/tool/research-manager.ts` | Research operations |
-| `.opencode/tool/session-manager.ts` | Runtime session management |
-| `.opencode/tool/python-repl.ts` | REPL tool interface |
-| `.opencode/tool/notebook-writer.ts` | Jupyter notebook generation |
-| `.opencode/tool/migration-tool.ts` | Legacy session migration utility |
-| `.opencode/tool/notebook-search.ts` | Notebook content search |
-| `.opencode/lib/notebook-frontmatter.ts`| Frontmatter parsing/updating |
-| `.opencode/lib/readme-index.ts` | README index generation |
-| `.opencode/lib/paths.ts` | Centralized path resolver |
-| `.opencode/lib/report-markdown.ts` | Report generation library |
-| `.opencode/lib/pdf-export.ts` | PDF export utilities |
+| `src/bridge/gyoshu_bridge.py` | JSON-RPC Python execution bridge |
+| `src/tool/research-manager.ts` | Research operations |
+| `src/tool/session-manager.ts` | Runtime session management |
+| `src/tool/python-repl.ts` | REPL tool interface |
+| `src/tool/notebook-writer.ts` | Jupyter notebook generation |
+| `src/tool/migration-tool.ts` | Legacy session migration utility |
+| `src/tool/notebook-search.ts` | Notebook content search |
+| `src/lib/notebook-frontmatter.ts`| Frontmatter parsing/updating |
+| `src/lib/readme-index.ts` | README index generation |
+| `src/lib/paths.ts` | Centralized path resolver |
+| `src/lib/report-markdown.ts` | Report generation library |
+| `src/lib/pdf-export.ts` | PDF export utilities |
 | `tests/test_bridge.py` | Bridge unit tests |
 
 ## Common Tasks
@@ -523,7 +502,7 @@ Cells are tagged with `gyoshu-*` markers in metadata to structure the research:
 3. Run: `pytest tests/test_file.py::TestClass::test_method -v`
 
 ### Modifying the Python Bridge
-1. Edit `.opencode/bridge/gyoshu_bridge.py`
+1. Edit `src/bridge/gyoshu_bridge.py`
 2. Run tests: `pytest tests/test_bridge.py -v`
 3. Test manually with JSON-RPC messages
 

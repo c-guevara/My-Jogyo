@@ -22,7 +22,7 @@ filterwarnings = [
 ]
 
 [tool.coverage.run]
-source = [".opencode/bridge"]
+source = ["src/bridge"]
 omit = ["tests/*"]
 
 [tool.coverage.report]

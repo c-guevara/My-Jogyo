@@ -52,12 +52,12 @@ cd My-Jogyo && ./install.sh
 ### Option 3: Manual Installation
 
 ```bash
-# Copy to your project (local)
-cp -r .opencode/ /path/to/your/project/
+# Clone the repo
+git clone https://github.com/Yeachan-Heo/My-Jogyo.git
 
-# Or install globally
+# Copy to global config
 mkdir -p ~/.config/opencode/
-cp -r .opencode/* ~/.config/opencode/
+cp -r My-Jogyo/src/* ~/.config/opencode/
 ```
 
 ---
@@ -219,11 +219,11 @@ It's a partnership. The Professor has the vision. The TA makes it happen. Togeth
 
 ## 🤝 Better Together: Oh-My-OpenCode + My-Jogyo
 
-For **data-driven product development**, combine My-Jogyo with [Oh-My-OpenCode](https://github.com/Yeachan-Heo/oh-my-opencode):
+For **data-driven product development**, combine My-Jogyo with [Oh-My-OpenCode](https://github.com/code-yeongyu/oh-my-opencode):
 
 | Tool | Focus | Best For |
 |------|-------|----------|
-| **[Oh-My-OpenCode](https://github.com/Yeachan-Heo/oh-my-opencode)** | 🏗️ Product Development | Building features, writing code, shipping products |
+| **[Oh-My-OpenCode](https://github.com/code-yeongyu/oh-my-opencode)** | 🏗️ Product Development | Building features, writing code, shipping products |
 | **My-Jogyo** | 📊 Data Analysis | Research, experiments, insights, ML models |
 
 ### The Synergy

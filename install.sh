@@ -24,7 +24,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 REPO_URL="https://github.com/Yeachan-Heo/My-Jogyo.git"
 TEMP_DIR=""
 
-if [ -d "$SCRIPT_DIR/.opencode" ]; then
+if [ -d "$SCRIPT_DIR/src" ]; then
     # Running from cloned repo
     SOURCE_DIR="$SCRIPT_DIR"
     echo -e "📂 Installing from local directory..."
@@ -50,9 +50,9 @@ if command -v rsync &> /dev/null; then
         --exclude='node_modules' \
         --exclude='__pycache__' \
         --exclude='.git' \
-        "$SOURCE_DIR/.opencode/" "$CONFIG_DIR/"
+        "$SOURCE_DIR/src/" "$CONFIG_DIR/"
 else
-    cp -r "$SOURCE_DIR/.opencode/"* "$CONFIG_DIR/"
+    cp -r "$SOURCE_DIR/src/"* "$CONFIG_DIR/"
     find "$CONFIG_DIR" -name "*.test.ts" -delete 2>/dev/null || true
     find "$CONFIG_DIR" -name "*.test.js" -delete 2>/dev/null || true
 fi
