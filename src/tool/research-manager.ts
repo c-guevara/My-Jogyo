@@ -266,44 +266,44 @@ function validateId(id: string, type: string): void {
 // =============================================================================
 
 /**
- * Ensures the research directory exists.
- * Creates parent directories recursively if needed.
+ * @deprecated Legacy directory creation disabled. Use notebook-centric storage.
+ * 
+ * Previously created ./gyoshu/research/ directories, but this pollutes project roots.
+ * Now a no-op. Use reportTitle parameter for notebook-centric storage instead.
+ * Run `/gyoshu migrate --to-notebooks` to migrate existing legacy data.
  */
 function ensureResearchRootDir(): void {
-  ensureDirSync(getResearchDir());
+  // No-op: Legacy directory creation disabled to prevent polluting project roots
+  // Use notebook-centric storage (reportTitle parameter) instead
 }
 
 /**
- * Ensures all directories for a research project exist.
+ * @deprecated Legacy directory creation disabled. Use notebook-centric storage.
+ * 
+ * Previously created ./gyoshu/research/{id}/ structure, but this pollutes project roots.
+ * Now a no-op. Legacy operations will fail if directories don't exist.
+ * Run `/gyoshu migrate --to-notebooks` to migrate existing legacy data.
  *
- * @param researchId - The research project identifier
+ * @param researchId - The research project identifier (unused)
  */
-async function ensureResearchDirs(researchId: string): Promise<void> {
-  const researchPath = getResearchPath(researchId);
-  const runsDir = path.join(researchPath, "runs");
-  const notebooksDir = getResearchNotebooksDir(researchId);
-  const artifactsDir = getResearchArtifactsDir(researchId);
-
-  await fs.mkdir(researchPath, { recursive: true });
-  await fs.mkdir(runsDir, { recursive: true });
-  await fs.mkdir(notebooksDir, { recursive: true });
-  await fs.mkdir(artifactsDir, { recursive: true });
+async function ensureResearchDirs(_researchId: string): Promise<void> {
+  // No-op: Legacy directory creation disabled to prevent polluting project roots
+  // Legacy 'create' operations will fail - use reportTitle for notebook-centric storage
 }
 
 /**
- * Ensures run-specific directories exist.
+ * @deprecated Legacy directory creation disabled. Use notebook-centric storage.
+ * 
+ * Previously created run-specific artifact directories, but this pollutes project roots.
+ * Now a no-op. Legacy operations will fail if directories don't exist.
+ * Run `/gyoshu migrate --to-notebooks` to migrate existing legacy data.
  *
- * @param researchId - The research project identifier
- * @param runId - The run identifier
+ * @param researchId - The research project identifier (unused)
+ * @param runId - The run identifier (unused)
  */
-async function ensureRunDirs(researchId: string, runId: string): Promise<void> {
-  const runArtifactsDir = path.join(getResearchArtifactsDir(researchId), runId);
-  const plotsDir = path.join(runArtifactsDir, "plots");
-  const exportsDir = path.join(runArtifactsDir, "exports");
-
-  await fs.mkdir(runArtifactsDir, { recursive: true });
-  await fs.mkdir(plotsDir, { recursive: true });
-  await fs.mkdir(exportsDir, { recursive: true });
+async function ensureRunDirs(_researchId: string, _runId: string): Promise<void> {
+  // No-op: Legacy directory creation disabled to prevent polluting project roots
+  // Legacy 'addRun' operations will fail - use reportTitle for notebook-centric storage
 }
 
 /**

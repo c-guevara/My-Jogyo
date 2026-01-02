@@ -123,13 +123,12 @@ describe("Research CRUD Operations", () => {
       expect(manifest.parentResearchId).toBe("parent-123");
     });
 
-    test("creates research directories correctly", async () => {
+    test("legacy create does NOT create extra directories (deprecated behavior)", async () => {
       await execute({
         action: "create",
         researchId: "dir-test-research",
       });
 
-      // Verify directory structure
       const researchPath = path.join(testDir, "gyoshu", "research", "dir-test-research");
       const runsDir = path.join(researchPath, "runs");
       const notebooksDir = path.join(researchPath, "notebooks");
@@ -137,10 +136,10 @@ describe("Research CRUD Operations", () => {
       const manifestPath = path.join(researchPath, "research.json");
 
       expect(await fs.access(researchPath).then(() => true).catch(() => false)).toBe(true);
-      expect(await fs.access(runsDir).then(() => true).catch(() => false)).toBe(true);
-      expect(await fs.access(notebooksDir).then(() => true).catch(() => false)).toBe(true);
-      expect(await fs.access(artifactsDir).then(() => true).catch(() => false)).toBe(true);
       expect(await fs.access(manifestPath).then(() => true).catch(() => false)).toBe(true);
+      expect(await fs.access(runsDir).then(() => true).catch(() => false)).toBe(false);
+      expect(await fs.access(notebooksDir).then(() => true).catch(() => false)).toBe(false);
+      expect(await fs.access(artifactsDir).then(() => true).catch(() => false)).toBe(false);
     });
 
     test("throws error if researchId is missing", async () => {
@@ -609,7 +608,7 @@ describe("Run Operations", () => {
       expect(runDetail.executionLog).toHaveLength(1);
     });
 
-    test("creates run directories", async () => {
+    test("legacy addRun does NOT create extra directories (deprecated behavior)", async () => {
       await execute({
         action: "addRun",
         researchId: "run-test-research",
@@ -628,9 +627,9 @@ describe("Run Operations", () => {
       const plotsDir = path.join(runArtifactsDir, "plots");
       const exportsDir = path.join(runArtifactsDir, "exports");
 
-      expect(await fs.access(runArtifactsDir).then(() => true).catch(() => false)).toBe(true);
-      expect(await fs.access(plotsDir).then(() => true).catch(() => false)).toBe(true);
-      expect(await fs.access(exportsDir).then(() => true).catch(() => false)).toBe(true);
+      expect(await fs.access(runArtifactsDir).then(() => true).catch(() => false)).toBe(false);
+      expect(await fs.access(plotsDir).then(() => true).catch(() => false)).toBe(false);
+      expect(await fs.access(exportsDir).then(() => true).catch(() => false)).toBe(false);
     });
 
     test("creates run detail file", async () => {
