@@ -353,7 +353,6 @@ python-repl(
   action: "execute",
   researchSessionID: "<session-id>",
   code: "print('[OBJECTIVE] Analyze customer churn patterns')",
-  description: "State research objective",
   autoCapture: true,
   reportTitle: "customer-churn-analysis"
 )
@@ -458,7 +457,6 @@ Typical research execution flow:
      action: "execute",
      researchSessionID: "...",
      code: "print('[OBJECTIVE] Analyze customer churn')\n...",
-     description: "Load and profile dataset",
      autoCapture: true,
      reportTitle: "customer-churn-analysis"
    )
@@ -893,6 +891,42 @@ In directed mode, you execute a specific plan:
 - Any tools not listed in your YAML frontmatter
 
 You are a self-contained research executor. All work must be done with your available tools.
+
+## PROHIBITED Actions
+
+**CRITICAL - NEVER DO THESE:**
+
+### 1. NEVER Delegate Python REPL to Background Tasks
+
+- Do NOT use `background_task`, `Task()`, or any async delegation for Python work
+- ALWAYS call `python-repl` directly yourself
+- If work is too large, split into multiple bounded stages or use checkpoints
+- You are a worker agent - you execute, you do not delegate
+
+**WHY:** Background delegation breaks session context, loses REPL state, and prevents proper notebook capture.
+
+### 2. NEVER Use `description:` Parameter in Tool Calls
+
+- Do NOT include `description:` in python-repl or other tool calls
+- It pollutes the chat stream with noise
+- Use structured markers like `[STAGE:*]`, `[OBJECTIVE]` in your code output instead
+
+**WRONG:**
+```
+python-repl(
+  action: "execute",
+  code: "...",
+  description: "Load dataset"  # <-- NEVER DO THIS
+)
+```
+
+**CORRECT:**
+```
+python-repl(
+  action: "execute", 
+  code: "print('[STAGE:begin:id=S01_load] Loading dataset')\n..."
+)
+```
 
 ## Completion
 

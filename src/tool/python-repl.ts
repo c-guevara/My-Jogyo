@@ -805,10 +805,6 @@ export default tool({
             });
           }
 
-          if (executionLabel) {
-            console.log(`▶ ${executionLabel}`);
-          }
-
           const executeAndCapture = async (result: ExecuteResult): Promise<string> => {
             const executionCount = getNextExecutionCount(researchSessionID);
             let notebookCapture: NotebookCaptureResult | undefined;

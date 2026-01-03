@@ -148,29 +148,16 @@ export async function canBreakLock(lockInfo: LockInfo): Promise<boolean> {
   }
   
   if (process.platform === 'win32') {
-    console.warn(
-      `[SessionLock] Lock held by PID ${lockInfo.pid} on ${lockInfo.hostname}. ` +
-      `Manual unlock required on Windows. Lock age: ${Math.round(age / 1000)}s`
-    );
     return false;
   }
   
   if (lockInfo.hostname !== os.hostname()) {
-    console.warn(
-      `[SessionLock] Lock held by different host: ${lockInfo.hostname}. ` +
-      `Cannot verify process status remotely. Lock age: ${Math.round(age / 1000)}s`
-    );
     return age > 300000; // 5 minutes for remote locks
   }
   
   const alive = await isProcessAlive(lockInfo.pid, lockInfo.processStartTime);
   
-  if (!alive) {
-    console.log(
-      `[SessionLock] Breaking stale lock from dead process PID ${lockInfo.pid}. ` +
-      `Lock age: ${Math.round(age / 1000)}s`
-    );
-  }
+
   
   return !alive;
 }
@@ -343,9 +330,7 @@ export class SessionLock {
         await fs.unlink(this.lockPath);
       }
     } catch (err: any) {
-      if (err.code !== 'ENOENT') {
-        console.warn(`[SessionLock] Error releasing lock: ${err.message}`);
-      }
+      // Ignore errors (lock might be already gone)
     } finally {
       this.released = true;
     }
@@ -354,7 +339,6 @@ export class SessionLock {
   async forceBreak(): Promise<void> {
     try {
       await fs.unlink(this.lockPath);
-      console.warn(`[SessionLock] Force-broke lock at ${this.lockPath}`);
     } catch (err: any) {
       if (err.code !== 'ENOENT') {
         throw err;
