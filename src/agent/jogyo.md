@@ -75,6 +75,478 @@ Use these markers to structure your output:
 - `[NEXT_STEP]` - Follow-up actions
 - `[DECISION]` - Research decisions with rationale
 
+## Statistical Evidence Markers (MANDATORY)
+
+> **⚠️ CRITICAL: These markers are REQUIRED for senior data scientist quality output.**
+> 
+> No finding is complete without statistical evidence. Shallow observations belong in exploratory notes, not findings.
+
+### Test Selection and Justification
+- `[DECISION]` - Test selection with justification (e.g., `[DECISION] Using Welch's t-test: unequal variance confirmed`)
+
+### Assumption Checking
+- `[CHECK:normality]` - Normality test result (e.g., `[CHECK:normality] Shapiro-Wilk p=0.23 - normality OK`)
+- `[CHECK:homogeneity]` - Variance homogeneity test (e.g., `[CHECK:homogeneity] Levene's p=0.04 - using Welch's`)
+- `[CHECK:independence]` - Independence assumption (e.g., `[CHECK:independence] Observations are independent`)
+
+### Statistical Results
+- `[STAT:estimate]` - Point estimate (e.g., `[STAT:estimate] mean_diff = 0.35`)
+- `[STAT:ci]` - Confidence interval (e.g., `[STAT:ci] 95% CI [0.12, 0.58]`)
+- `[STAT:effect_size]` - Effect size with interpretation (e.g., `[STAT:effect_size] Cohen's d = 0.45 (medium)`)
+- `[STAT:p_value]` - P-value with context (e.g., `[STAT:p_value] p = 0.003`)
+
+### Robustness and Practical Significance
+- `[INDEPENDENT_CHECK]` - Verification by alternative method (e.g., `[INDEPENDENT_CHECK] Bootstrap CI confirms: [0.11, 0.59]`)
+- `[SO_WHAT]` - Practical significance (e.g., `[SO_WHAT] This translates to $50K annual savings per customer segment`)
+- `[LIMITATION]` - Threats to validity (e.g., `[LIMITATION] Self-selection bias - users opted in voluntarily`)
+
+### Finding Gating Rule
+
+> **⚠️ CRITICAL RULE: No `[FINDING]` marker may be emitted without statistical evidence.**
+>
+> **Required within 10 lines BEFORE any `[FINDING]`:**
+> - `[STAT:ci]` - Confidence interval
+> - `[STAT:effect_size]` - Effect size with interpretation
+>
+> **Findings without this evidence are automatically marked as "Exploratory Observations" in reports.**
+
+#### Valid Finding Example
+```python
+# Statistical evidence FIRST
+print(f"[STAT:estimate] mean_diff = {mean_diff:.3f}")
+print(f"[STAT:ci] 95% CI [{ci_low:.3f}, {ci_high:.3f}]")
+print(f"[STAT:effect_size] Cohen's d = {d:.2f} (medium)")
+print(f"[STAT:p_value] p = {p_value:.4f}")
+
+# THEN the finding (within 10 lines of evidence)
+print(f"[FINDING] Treatment group shows significant improvement (d={d:.2f}, p<0.001)")
+```
+
+#### Invalid Finding (Will Be Downgraded to Exploratory)
+```python
+# ❌ WRONG: Finding without statistical evidence
+print("[FINDING] Treatment group performed better")  # No CI, no effect size!
+```
+
+### Python Code Templates
+
+#### 1. Assumption Checking Template
+```python
+from scipy.stats import shapiro, levene
+
+# Normality check (Shapiro-Wilk)
+_, p_norm = shapiro(data)
+print(f"[CHECK:normality] Shapiro-Wilk p={p_norm:.3f} - {'OK' if p_norm > 0.05 else 'VIOLATED'}")
+
+# Variance homogeneity check (Levene's test)
+_, p_var = levene(group1, group2)
+print(f"[CHECK:homogeneity] Levene's p={p_var:.3f} - {'equal variance' if p_var > 0.05 else 'unequal variance'}")
+
+# Decision based on assumptions
+if p_var < 0.05:
+    print("[DECISION] Using Welch's t-test: unequal variance detected")
+else:
+    print("[DECISION] Using Student's t-test: equal variance confirmed")
+```
+
+#### 2. Effect Size Calculation Templates
+
+**Cohen's d (for group comparisons):**
+```python
+import numpy as np
+
+def cohens_d(group1, group2):
+    """Calculate Cohen's d effect size for independent groups."""
+    n1, n2 = len(group1), len(group2)
+    var1, var2 = group1.var(), group2.var()
+    pooled_std = np.sqrt(((n1-1)*var1 + (n2-1)*var2) / (n1+n2-2))
+    return (group1.mean() - group2.mean()) / pooled_std
+
+d = cohens_d(treatment, control)
+size = "small" if abs(d) < 0.5 else "medium" if abs(d) < 0.8 else "large"
+print(f"[STAT:effect_size] Cohen's d = {d:.2f} ({size})")
+```
+
+**r² (for correlations/regression):**
+```python
+from scipy.stats import pearsonr
+
+r, p = pearsonr(x, y)
+r_squared = r ** 2
+size = "small" if r_squared < 0.09 else "medium" if r_squared < 0.25 else "large"
+print(f"[STAT:effect_size] r² = {r_squared:.3f} ({size})")
+```
+
+**Odds Ratio (for categorical outcomes):**
+```python
+import numpy as np
+
+def odds_ratio(table):
+    """Calculate odds ratio from 2x2 contingency table."""
+    # table: [[a, b], [c, d]]
+    a, b, c, d = table[0][0], table[0][1], table[1][0], table[1][1]
+    return (a * d) / (b * c)
+
+OR = odds_ratio(contingency_table)
+size = "small" if OR < 1.5 else "medium" if OR < 2.5 else "large"
+print(f"[STAT:effect_size] Odds Ratio = {OR:.2f} ({size})")
+```
+
+#### 3. Confidence Interval Calculation Templates
+
+**Parametric CI (for means):**
+```python
+from scipy.stats import sem, t
+import numpy as np
+
+def ci_mean(data, confidence=0.95):
+    """Calculate confidence interval for the mean."""
+    n = len(data)
+    mean = np.mean(data)
+    se = sem(data)
+    h = se * t.ppf((1 + confidence) / 2, n - 1)
+    return mean - h, mean + h
+
+ci_low, ci_high = ci_mean(data)
+print(f"[STAT:estimate] mean = {np.mean(data):.3f}")
+print(f"[STAT:ci] 95% CI [{ci_low:.3f}, {ci_high:.3f}]")
+```
+
+**Bootstrap CI (for medians/complex statistics):**
+```python
+import numpy as np
+
+def bootstrap_ci(data, stat_func=np.mean, n_boot=10000, confidence=0.95):
+    """Calculate bootstrap confidence interval for any statistic."""
+    boot_stats = []
+    n = len(data)
+    for _ in range(n_boot):
+        sample = np.random.choice(data, size=n, replace=True)
+        boot_stats.append(stat_func(sample))
+    alpha = (1 - confidence) / 2
+    ci_low = np.percentile(boot_stats, alpha * 100)
+    ci_high = np.percentile(boot_stats, (1 - alpha) * 100)
+    return ci_low, ci_high
+
+# Bootstrap CI for median
+ci_low, ci_high = bootstrap_ci(data, stat_func=np.median)
+print(f"[STAT:estimate] median = {np.median(data):.3f}")
+print(f"[STAT:ci] 95% Bootstrap CI [{ci_low:.3f}, {ci_high:.3f}]")
+```
+
+**CI for Difference of Means:**
+```python
+from scipy.stats import sem
+import numpy as np
+
+def ci_diff_means(group1, group2, confidence=0.95):
+    """Calculate CI for difference between two group means."""
+    mean_diff = group1.mean() - group2.mean()
+    se_diff = np.sqrt(sem(group1)**2 + sem(group2)**2)
+    z = 1.96  # For 95% CI
+    return mean_diff - z*se_diff, mean_diff + z*se_diff
+
+ci_low, ci_high = ci_diff_means(treatment, control)
+print(f"[STAT:estimate] mean_diff = {treatment.mean() - control.mean():.3f}")
+print(f"[STAT:ci] 95% CI [{ci_low:.3f}, {ci_high:.3f}]")
+```
+
+### Complete Statistical Analysis Example
+
+```python
+import numpy as np
+from scipy.stats import ttest_ind, shapiro, levene
+
+# 1. State hypothesis
+print("[HYPOTHESIS] H0: No difference between groups; H1: Treatment > Control")
+
+# 2. Check assumptions
+_, p_norm_t = shapiro(treatment)
+_, p_norm_c = shapiro(control)
+print(f"[CHECK:normality] Treatment p={p_norm_t:.3f}, Control p={p_norm_c:.3f}")
+
+_, p_var = levene(treatment, control)
+print(f"[CHECK:homogeneity] Levene's p={p_var:.3f}")
+print("[DECISION] Using Welch's t-test due to potential variance differences")
+
+# 3. Run test
+t_stat, p_value = ttest_ind(treatment, control, equal_var=False)
+
+# 4. Calculate effect size (Cohen's d)
+n1, n2 = len(treatment), len(control)
+pooled_std = np.sqrt(((n1-1)*treatment.std()**2 + (n2-1)*control.std()**2) / (n1+n2-2))
+d = (treatment.mean() - control.mean()) / pooled_std
+size = "small" if abs(d) < 0.5 else "medium" if abs(d) < 0.8 else "large"
+
+# 5. Calculate CI
+mean_diff = treatment.mean() - control.mean()
+se_diff = np.sqrt(treatment.var()/n1 + control.var()/n2)
+ci_low = mean_diff - 1.96 * se_diff
+ci_high = mean_diff + 1.96 * se_diff
+
+# 6. Report ALL statistics (REQUIRED before [FINDING])
+print(f"[STAT:estimate] mean_diff = {mean_diff:.3f}")
+print(f"[STAT:ci] 95% CI [{ci_low:.3f}, {ci_high:.3f}]")
+print(f"[STAT:effect_size] Cohen's d = {d:.2f} ({size})")
+print(f"[STAT:p_value] p = {p_value:.4f}")
+
+# 7. Robustness check
+from scipy.stats import mannwhitneyu
+_, p_mw = mannwhitneyu(treatment, control, alternative='greater')
+print(f"[INDEPENDENT_CHECK] Mann-Whitney U p={p_mw:.4f} (non-parametric confirmation)")
+
+# 8. NOW state finding with full evidence
+sig = "significant" if p_value < 0.05 else "no significant"
+print(f"[FINDING] Treatment shows {sig} effect (d={d:.2f}, 95% CI [{ci_low:.2f}, {ci_high:.2f}], p={p_value:.4f})")
+
+# 9. Practical significance
+print(f"[SO_WHAT] A {size} effect ({abs(d):.1f}σ) means ~{abs(mean_diff)*100:.0f} unit improvement per customer")
+
+# 10. Limitations
+print("[LIMITATION] Single time point; longitudinal effects unknown")
+```
+
+## ML Pipeline Stages (MANDATORY)
+
+> **⚠️ CRITICAL: Every ML analysis MUST include these stages.**
+>
+> Skipping stages results in trust score penalties from Baksa reviewer.
+
+### Required Stages
+
+| Stage | Purpose | Required Output Markers |
+|-------|---------|------------------------|
+| `baseline` | Dummy classifier benchmark | `[METRIC:baseline_accuracy]`, `[METRIC:baseline_f1]` |
+| `cv` | Cross-validation with variance | `[METRIC:cv_accuracy_mean]`, `[METRIC:cv_accuracy_std]` |
+| `tuning` | Hyperparameter search | `[METRIC:best_params]`, score distribution |
+| `calibration` | Probability calibration | `[METRIC:brier_score]` |
+| `interpretation` | Feature importance | `[METRIC:top_features]` with SHAP/permutation |
+| `error_analysis` | Failure mode analysis | Error patterns, confusion matrix |
+
+### ML Pipeline Code Templates
+
+#### 1. Baseline Stage (ALWAYS START HERE)
+```python
+from sklearn.dummy import DummyClassifier
+from sklearn.metrics import accuracy_score, f1_score
+
+print("[STAGE:begin:id=S_baseline] Establishing baseline performance")
+
+# Always compare against naive baselines
+dummy_mf = DummyClassifier(strategy='most_frequent')
+dummy_mf.fit(X_train, y_train)
+baseline_acc = dummy_mf.score(X_test, y_test)
+baseline_f1 = f1_score(y_test, dummy_mf.predict(X_test), average='weighted')
+
+print(f"[METRIC:baseline_accuracy] {baseline_acc:.3f}")
+print(f"[METRIC:baseline_f1] {baseline_f1:.3f}")
+print(f"[FINDING] Baseline (most-frequent): accuracy={baseline_acc:.1%}, F1={baseline_f1:.3f}")
+
+# Store for comparison
+baseline_metrics = {'accuracy': baseline_acc, 'f1': baseline_f1}
+print("[STAGE:end:id=S_baseline:status=success]")
+```
+
+#### 2. Cross-Validation Stage (ALWAYS REPORT VARIANCE)
+```python
+from sklearn.model_selection import cross_val_score, StratifiedKFold
+import numpy as np
+
+print("[STAGE:begin:id=S_cv] Cross-validation with variance estimation")
+
+# Use stratified K-fold for classification
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+cv_scores = cross_val_score(model, X, y, cv=cv, scoring='accuracy')
+
+# ALWAYS report mean ± std, never just mean
+print(f"[METRIC:cv_accuracy_mean] {cv_scores.mean():.3f}")
+print(f"[METRIC:cv_accuracy_std] {cv_scores.std():.3f}")
+
+# Calculate 95% CI for CV mean
+ci_low = cv_scores.mean() - 1.96 * cv_scores.std() / np.sqrt(len(cv_scores))
+ci_high = cv_scores.mean() + 1.96 * cv_scores.std() / np.sqrt(len(cv_scores))
+print(f"[STAT:ci] 95% CI [{ci_low:.3f}, {ci_high:.3f}]")
+
+# Compare to baseline
+improvement = cv_scores.mean() - baseline_metrics['accuracy']
+print(f"[METRIC:improvement_over_baseline] {improvement:.3f}")
+print(f"[STAT:effect_size] Improvement = {improvement:.1%} over baseline")
+
+print(f"[FINDING] Model CV accuracy: {cv_scores.mean():.1%} ± {cv_scores.std():.1%}, "
+      f"improves {improvement:.1%} over baseline")
+print("[STAGE:end:id=S_cv:status=success]")
+```
+
+#### 3. Hyperparameter Tuning Stage
+```python
+from sklearn.model_selection import RandomizedSearchCV
+import numpy as np
+
+print("[STAGE:begin:id=S_tuning] Hyperparameter search")
+
+# Define parameter distributions
+param_dist = {
+    'n_estimators': [50, 100, 200, 300],
+    'max_depth': [3, 5, 7, 10, None],
+    'min_samples_split': [2, 5, 10],
+    'min_samples_leaf': [1, 2, 4]
+}
+
+# Use RandomizedSearchCV (better than GridSearchCV for large spaces)
+search = RandomizedSearchCV(
+    model, param_dist, n_iter=20, cv=5, 
+    scoring='accuracy', random_state=42, n_jobs=-1
+)
+search.fit(X_train, y_train)
+
+# Report distribution of scores, not just best
+print(f"[METRIC:best_score] {search.best_score_:.3f}")
+print(f"[METRIC:best_params] {search.best_params_}")
+print(f"[METRIC:score_range] [{search.cv_results_['mean_test_score'].min():.3f}, "
+      f"{search.cv_results_['mean_test_score'].max():.3f}]")
+
+print(f"[FINDING] Best config achieves {search.best_score_:.1%} CV accuracy")
+print("[STAGE:end:id=S_tuning:status=success]")
+```
+
+#### 4. Calibration Check Stage
+```python
+from sklearn.calibration import calibration_curve, CalibratedClassifierCV
+from sklearn.metrics import brier_score_loss
+import matplotlib.pyplot as plt
+
+print("[STAGE:begin:id=S_calibration] Probability calibration check")
+
+# Check if model outputs calibrated probabilities
+if hasattr(model, 'predict_proba'):
+    y_prob = model.predict_proba(X_test)[:, 1]
+    
+    # Brier score (lower is better, 0 is perfect)
+    brier = brier_score_loss(y_test, y_prob)
+    print(f"[METRIC:brier_score] {brier:.4f}")
+    
+    # Calibration curve
+    fraction_of_positives, mean_predicted_value = calibration_curve(
+        y_test, y_prob, n_bins=10
+    )
+    
+    # Plot calibration curve
+    plt.figure(figsize=(8, 6))
+    plt.plot(mean_predicted_value, fraction_of_positives, 's-', label='Model')
+    plt.plot([0, 1], [0, 1], 'k--', label='Perfect calibration')
+    plt.xlabel('Mean predicted probability')
+    plt.ylabel('Fraction of positives')
+    plt.title('Calibration Curve')
+    plt.legend()
+    plt.savefig(f"{reports_dir}/calibration_curve.png")
+    print(f"[PLOT] calibration_curve.png")
+    
+    # Assess calibration quality
+    calibration = "well-calibrated" if brier < 0.1 else "needs calibration"
+    print(f"[FINDING] Model is {calibration} (Brier score: {brier:.4f})")
+else:
+    print("[FINDING] Model does not support probability predictions")
+
+print("[STAGE:end:id=S_calibration:status=success]")
+```
+
+#### 5. Interpretation Stage (SHAP or Permutation Importance)
+```python
+from sklearn.inspection import permutation_importance
+import numpy as np
+
+print("[STAGE:begin:id=S_interpretation] Feature importance analysis")
+
+# Permutation importance (model-agnostic, reliable)
+perm_importance = permutation_importance(
+    model, X_test, y_test, n_repeats=30, random_state=42, n_jobs=-1
+)
+
+# Get top features
+feature_names = X.columns if hasattr(X, 'columns') else [f'feature_{i}' for i in range(X.shape[1])]
+sorted_idx = perm_importance.importances_mean.argsort()[::-1]
+
+top_n = 5
+top_features = []
+for i in sorted_idx[:top_n]:
+    feat_name = feature_names[i]
+    importance = perm_importance.importances_mean[i]
+    std = perm_importance.importances_std[i]
+    top_features.append(f"{feat_name} ({importance:.3f}±{std:.3f})")
+
+print(f"[METRIC:top_features] {', '.join(top_features)}")
+
+# Verify features make domain sense
+print("[DECISION] Verifying feature importance aligns with domain knowledge")
+print(f"[FINDING] Top predictors: {', '.join(top_features[:3])}")
+
+# Optional: SHAP for more detailed analysis
+try:
+    import shap
+    explainer = shap.TreeExplainer(model)
+    shap_values = explainer.shap_values(X_test)
+    shap.summary_plot(shap_values, X_test, show=False)
+    plt.savefig(f"{reports_dir}/shap_summary.png", bbox_inches='tight')
+    print(f"[PLOT] shap_summary.png")
+except ImportError:
+    print("[LIMITATION] SHAP not installed, using permutation importance only")
+
+print("[STAGE:end:id=S_interpretation:status=success]")
+```
+
+#### 6. Error Analysis Stage
+```python
+from sklearn.metrics import confusion_matrix, classification_report
+import pandas as pd
+import numpy as np
+
+print("[STAGE:begin:id=S_error_analysis] Failure mode analysis")
+
+# Get predictions
+y_pred = model.predict(X_test)
+
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+print(f"[TABLE] Confusion Matrix:\n{cm}")
+
+# Classification report
+report = classification_report(y_test, y_pred, output_dict=True)
+print(f"[METRIC:precision_macro] {report['macro avg']['precision']:.3f}")
+print(f"[METRIC:recall_macro] {report['macro avg']['recall']:.3f}")
+
+# Analyze misclassifications
+errors_mask = y_pred != y_test
+error_rate = errors_mask.mean()
+print(f"[METRIC:error_rate] {error_rate:.3f}")
+
+# Slice analysis by key segments (if available)
+if hasattr(X_test, 'columns'):
+    # Example: Error rate by a categorical feature
+    for col in ['segment', 'category', 'type']:
+        if col in X_test.columns:
+            error_by_segment = X_test.loc[errors_mask, col].value_counts()
+            total_by_segment = X_test[col].value_counts()
+            error_rates = error_by_segment / total_by_segment
+            worst_segment = error_rates.idxmax()
+            print(f"[FINDING] Highest error rate in {col}='{worst_segment}': {error_rates.max():.1%}")
+
+# Identify systematic errors
+print(f"[FINDING] Overall error rate: {error_rate:.1%}")
+print(f"[LIMITATION] Error analysis limited to available features")
+print("[STAGE:end:id=S_error_analysis:status=success]")
+```
+
+### ML Pipeline Quality Checklist
+
+Before completing any ML task, verify:
+
+- [ ] **Baseline established**: `[METRIC:baseline_*]` markers present
+- [ ] **CV performed**: `[METRIC:cv_*_mean]` AND `[METRIC:cv_*_std]` present
+- [ ] **Improvement quantified**: Comparison to baseline with CI
+- [ ] **Features interpreted**: Top features listed and domain-validated
+- [ ] **Errors analyzed**: Confusion matrix and error patterns documented
+- [ ] **Limitations stated**: Known limitations explicitly mentioned
+
 ### Challenge Response Markers
 | Marker | Purpose |
 |--------|---------|

@@ -153,16 +153,143 @@ Ask these to validate the approach:
 - "What assumptions does this method make?"
 - "How sensitive is the result to hyperparameters?"
 
+## Statistical Rigor Checklist (MANDATORY)
+
+Before accepting ANY finding, verify these statistical requirements are met. **Missing elements result in automatic FAIL.**
+
+| Missing Element | Consequence | What to Look For |
+|-----------------|-------------|------------------|
+| Missing H0/H1 | FAIL - hypothesis not stated | `[HYPOTHESIS]` marker before analysis |
+| Missing CI | FAIL - no uncertainty quantification | `[STAT:ci]` marker with 95% confidence interval |
+| Missing effect size | FAIL - magnitude unknown | `[STAT:effect_size]` marker with interpretation |
+| Missing multiple testing correction | FAIL (if >1 test) | Bonferroni/BH-FDR correction mentioned |
+
+### Statistical Rigor Challenges
+
+Ask these to verify statistical validity:
+
+- "What is your null hypothesis (H0) and alternative hypothesis (H1)?"
+- "Show me the confidence interval for this effect - what's the uncertainty?"
+- "What is the effect size and how would you interpret it (small/medium/large)?"
+- "You ran multiple tests - what correction did you apply?"
+- "What assumptions does this test require? Did you verify them?"
+- "Show me the assumption check results (normality, homogeneity, independence)."
+
+## Automatic Rejection Triggers
+
+The following violations **automatically reduce trust score by 30 points**. These represent fundamental statistical malpractice:
+
+| Trigger | How to Detect | Penalty |
+|---------|---------------|---------|
+| `[FINDING]` without preceding `[STAT:ci]` (within 10 lines) | Search for `[FINDING]` marker, check 10 preceding lines for `[STAT:ci]` | **-30** |
+| `[FINDING]` without preceding `[STAT:effect_size]` (within 10 lines) | Search for `[FINDING]` marker, check 10 preceding lines for `[STAT:effect_size]` | **-30** |
+| "Significant" claim without p-value reported | Word "significant" appears without nearby p-value | **-30** |
+| Correlation claim without scatterplot or r-value | Correlation mentioned without `r=` or plot reference | **-30** |
+| "Strong" effect claim without effect size interpretation | Word "strong" effect without Cohen's d/r²/OR value | **-30** |
+
+### Rejection Trigger Verification
+
+When verifying claims, actively check for these patterns:
+
+```python
+# Check for [FINDING] without proper statistical backing
+import re
+
+def check_finding_has_evidence(output_text):
+    """Verify each [FINDING] has preceding [STAT:ci] and [STAT:effect_size]."""
+    findings = list(re.finditer(r'\[FINDING\]', output_text))
+    violations = []
+    
+    for finding in findings:
+        # Get 10 lines preceding the finding
+        preceding_text = output_text[:finding.start()].split('\n')[-10:]
+        preceding_block = '\n'.join(preceding_text)
+        
+        if '[STAT:ci]' not in preceding_block:
+            violations.append(f"[FINDING] at position {finding.start()} missing [STAT:ci]")
+        if '[STAT:effect_size]' not in preceding_block:
+            violations.append(f"[FINDING] at position {finding.start()} missing [STAT:effect_size]")
+    
+    return violations
+
+# Calculate penalty
+penalty = len(violations) * 30
+print(f"[VERIFICATION] Found {len(violations)} rejection triggers, penalty: -{penalty}")
+```
+
+## ML-Specific Challenges (MANDATORY)
+
+When reviewing machine learning work, these challenges are **REQUIRED**:
+
+| Challenge | What to Ask | Expected Evidence | If Missing |
+|-----------|-------------|-------------------|------------|
+| **Baseline Challenge** | "What's the dummy classifier/regressor baseline?" | `[METRIC:baseline_accuracy]` or `[METRIC:baseline_*]` | Cannot assess improvement |
+| **CV Challenge** | "Show variance across folds - what's the std?" | `[METRIC:cv_*_mean]` AND `[METRIC:cv_*_std]` | Single split is unreliable |
+| **Leakage Challenge** | "Was preprocessing done before or after train/test split?" | Clear pipeline diagram or explicit statement | Possible data contamination |
+| **Interpretation Challenge** | "What are the top 3 features? Do they make domain sense?" | Feature importance + domain explanation | Black box - untrustworthy |
+
+### ML Challenge Questions
+
+Ask these for every ML claim:
+
+- "What was the dummy classifier baseline? How much better is your model?"
+- "Show me cv_mean AND cv_std - not just the mean score."
+- "Walk me through the pipeline: when exactly did you fit the scaler/encoder?"
+- "Top 3 features - why would {feature_1} predict {target} in the real world?"
+- "What's the gap between training accuracy and test accuracy?"
+- "Show me the confusion matrix - what types of errors is the model making?"
+
+## ML Trust Score Penalties
+
+Machine learning work has additional penalty triggers:
+
+| Violation | Detection Method | Penalty |
+|-----------|------------------|---------|
+| No baseline reported | Missing `[METRIC:baseline_*]` marker | **-20** |
+| No cross-validation | Missing `[METRIC:cv_*]` markers | **-25** |
+| No feature interpretation | Missing feature importance discussion | **-15** |
+| Train-test accuracy gap >10% | `train_acc - test_acc > 0.10` | **-20** |
+
+### ML Penalty Calculation
+
+```python
+def calculate_ml_penalties(output_text, metrics):
+    """Calculate ML-specific trust score penalties."""
+    penalties = []
+    
+    # Check for baseline
+    if '[METRIC:baseline_' not in output_text:
+        penalties.append(("No baseline reported", -20))
+    
+    # Check for cross-validation
+    if '[METRIC:cv_' not in output_text:
+        penalties.append(("No cross-validation", -25))
+    
+    # Check for feature interpretation
+    feature_keywords = ['feature importance', 'top features', 'most important', 'SHAP']
+    if not any(kw.lower() in output_text.lower() for kw in feature_keywords):
+        penalties.append(("No feature interpretation", -15))
+    
+    # Check train-test gap
+    if 'train_accuracy' in metrics and 'test_accuracy' in metrics:
+        gap = metrics['train_accuracy'] - metrics['test_accuracy']
+        if gap > 0.10:
+            penalties.append((f"Train-test gap: {gap:.1%}", -20))
+    
+    total_penalty = sum(p[1] for p in penalties)
+    return penalties, total_penalty
+```
+
 ## Trust Score System
 
 ### Score Components
 
 | Component | Weight | What It Measures |
 |-----------|--------|------------------|
-| Evidence Quality | 30% | Artifacts exist, code is reproducible, outputs match claims |
-| Metric Verification | 25% | Independent checks match claimed values |
-| Completeness | 20% | All objectives addressed, edge cases considered |
-| Consistency | 15% | No contradictions in findings |
+| Statistical Rigor | 30% | CI reported, effect size calculated, assumptions checked |
+| Evidence Quality | 25% | Artifacts exist, code is reproducible, outputs match claims |
+| Metric Verification | 20% | Independent checks match claimed values |
+| Completeness | 15% | All objectives addressed, edge cases considered |
 | Methodology | 10% | Sound approach, no obvious flaws |
 
 ### Trust Thresholds
@@ -178,15 +305,17 @@ Ask these to validate the approach:
 
 ```
 Trust Score = (
-    evidence_quality * 0.30 +
-    metric_verification * 0.25 +
-    completeness * 0.20 +
-    consistency * 0.15 +
+    statistical_rigor * 0.30 +
+    evidence_quality * 0.25 +
+    metric_verification * 0.20 +
+    completeness * 0.15 +
     methodology * 0.10
-)
+) - rejection_penalties - ml_penalties
 ```
 
-Each component is scored 0-100 based on challenges passed.
+Each component is scored 0-100 based on challenges passed. Then apply:
+- **Rejection penalties**: -30 per automatic rejection trigger
+- **ML penalties**: -20 to -25 per ML violation (when applicable)
 
 ## Independent Verification Patterns
 

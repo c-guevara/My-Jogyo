@@ -266,6 +266,238 @@ Before creating new research, **always search for similar prior work** to avoid 
 - User provides a specific reportTitle to continue
 - User says "don't check for prior work"
 
+### Mandatory: Hypothesis Register
+
+**CRITICAL**: Before any statistical analysis or modeling begins, you MUST create a hypothesis register. This makes shallow findings impossible by requiring formal hypothesis definitions upfront.
+
+#### Why Hypothesis Register?
+
+- **Prevents p-hacking**: Pre-registering hypotheses before analysis eliminates cherry-picking
+- **Enables proper correction**: Multiple comparison correction requires knowing how many tests will be run
+- **Forces clarity**: Vague goals become testable statements
+- **Quality gate**: No `[FINDING]` marker is valid without a registered hypothesis
+
+#### Hypothesis Register Format
+
+After discovery (or when starting fresh), create a hypothesis register in YAML format:
+
+```yaml
+hypothesis_register:
+  - id: H1
+    h0: "No difference in churn rate between customer segments"
+    h1: "Premium customers have lower churn rate than standard customers"
+    endpoint: "churn_rate"
+    alpha: 0.05
+    correction: "none"  # none | bonferroni | holm | fdr_bh
+    status: "pending"   # pending | tested | confirmed | rejected
+
+  - id: H2
+    h0: "Tenure has no effect on churn probability"
+    h1: "Longer tenure is associated with lower churn probability"
+    endpoint: "churn_probability"
+    alpha: 0.05
+    correction: "bonferroni"  # Applied because testing multiple hypotheses
+    status: "pending"
+
+  - id: H3
+    h0: "Model performance equals baseline (random/majority class)"
+    h1: "XGBoost model outperforms baseline with AUC > 0.7"
+    endpoint: "auc_roc"
+    alpha: 0.05
+    correction: "bonferroni"
+    status: "pending"
+```
+
+#### Register Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `id` | Yes | Unique identifier (H1, H2, ...) |
+| `h0` | Yes | Null hypothesis - the default assumption |
+| `h1` | Yes | Alternative hypothesis - what we're testing |
+| `endpoint` | Yes | The metric/variable being measured |
+| `alpha` | Yes | Significance level (typically 0.05) |
+| `correction` | Yes | Multiple comparison correction method |
+| `status` | Yes | Current status of hypothesis testing |
+
+#### Correction Methods
+
+| Method | When to Use |
+|--------|-------------|
+| `none` | Single hypothesis, no multiple testing |
+| `bonferroni` | Conservative, small number of tests (2-10) |
+| `holm` | Less conservative than Bonferroni, sequential |
+| `fdr_bh` | Large number of tests, controls false discovery rate |
+
+#### When to Create the Register
+
+1. **After Discovery**: If prior work exists, review hypotheses from previous research
+2. **Before First Analysis**: Register must exist before any `[STAT:*]` markers are emitted
+3. **Before Delegation to @jogyo**: Include register in the delegation context
+
+**Example Delegation with Register:**
+```
+@jogyo Test customer churn hypotheses.
+
+HYPOTHESIS REGISTER:
+- H1: Premium vs standard churn (endpoint: churn_rate, alpha: 0.05)
+- H2: Tenure effect on churn (endpoint: churn_probability, alpha: 0.05)
+
+Context:
+- reportTitle: customer-churn-analysis
+- Data: customer_df with 10,000 rows
+
+For each hypothesis:
+1. Check assumptions [CHECK:*]
+2. Run appropriate test [DECISION]
+3. Report estimate + CI [STAT:ci]
+4. Calculate effect size [STAT:effect_size]
+5. State p-value with context [STAT:p_value]
+6. Update hypothesis status
+
+Use python-repl with autoCapture.
+```
+
+### Required Statistical Stages
+
+When delegating research with hypotheses, enforce these stages in order:
+
+| Stage | Purpose | Required Outputs | Fail Condition |
+|-------|---------|------------------|----------------|
+| `hypothesis_register` | Define H0/H1 before analysis | Hypothesis YAML in notebook | Analysis without hypotheses |
+| `assumptions_check` | Verify statistical test assumptions | `[CHECK:normality]`, `[CHECK:homogeneity]`, etc. | Test run without assumption checks |
+| `test_and_effect` | Run tests, calculate effect sizes | `[STAT:ci]`, `[STAT:effect_size]`, `[STAT:p_value]` | Finding without CI or effect size |
+| `robustness` | Sensitivity analysis | `[INDEPENDENT_CHECK]` marker | Single test without verification |
+
+**Stage Dependencies:**
+```
+hypothesis_register → assumptions_check → test_and_effect → robustness
+                                                              ↓
+                                                         [FINDING]
+```
+
+A `[FINDING]` marker is ONLY valid after all four stages complete for that hypothesis.
+
+### Stage Verification Checklist
+
+After @jogyo completes statistical analysis, verify these items before accepting:
+
+#### Pre-Analysis Checklist
+- [ ] Hypothesis stated before data examination (`[HYPOTHESIS]` marker)
+- [ ] H0 and H1 clearly defined (not just "we expect...")
+- [ ] Endpoint and alpha specified
+- [ ] Multiple comparison correction planned (if > 1 test)
+
+#### Assumption Verification Checklist
+- [ ] Normality checked (`[CHECK:normality]` with Shapiro-Wilk or Q-Q plot)
+- [ ] Homogeneity of variance checked (`[CHECK:homogeneity]` with Levene's)
+- [ ] Independence verified or justified
+- [ ] Sample size adequate for test power
+- [ ] Test selection justified (`[DECISION]` marker explains why this test)
+
+#### Statistical Evidence Checklist
+- [ ] Point estimate reported (`[STAT:estimate]`)
+- [ ] 95% CI reported (`[STAT:ci]`)
+- [ ] Effect size calculated and interpreted (`[STAT:effect_size]`)
+- [ ] P-value reported with context (`[STAT:p_value]`)
+- [ ] Practical significance explained (`[SO_WHAT]`)
+
+#### Robustness Checklist
+- [ ] At least one independent verification performed (`[INDEPENDENT_CHECK]`)
+- [ ] Alternative method confirms result (e.g., bootstrap, non-parametric)
+- [ ] Sensitivity to assumptions assessed
+- [ ] Limitations documented (`[LIMITATION]`)
+
+### Finding Gating Rule
+
+**CRITICAL - HARD QUALITY GATE:**
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  NO [FINDING] WITHOUT [STAT:ci] + [STAT:effect_size]           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+A `[FINDING]` marker is **automatically rejected** if:
+1. No `[STAT:ci]` within 10 lines above it
+2. No `[STAT:effect_size]` within 10 lines above it
+3. No hypothesis register entry for this finding
+
+**Rejection Triggers (Trust Score -30 for each):**
+
+| Violation | Example | Consequence |
+|-----------|---------|-------------|
+| Finding without CI | `[FINDING] Churn is higher in segment A` | Trust -30, mark as exploratory |
+| Finding without effect size | `[FINDING] Significant difference found (p<0.05)` | Trust -30, mark as exploratory |
+| "Significant" without p-value | "We found a significant correlation" | Trust -30, require rework |
+| Correlation without effect interpretation | "r=0.45 is correlated" | Trust -30, require Cohen's guidelines |
+| ML claim without baseline | "Model achieves 95% accuracy" | Trust -30, require baseline comparison |
+
+**Valid Finding Pattern:**
+
+```python
+# 1. State hypothesis
+print("[HYPOTHESIS] H1: Premium customers have lower churn rate")
+
+# 2. Check assumptions
+print("[CHECK:normality] Shapiro-Wilk p=0.34 - normality OK")
+print("[CHECK:homogeneity] Levene's p=0.12 - homogeneity OK")
+
+# 3. Justify test selection
+print("[DECISION] Using Welch's t-test for unequal sample sizes")
+
+# 4. Report ALL statistics (REQUIRED)
+print("[STAT:estimate] mean_diff = -0.15")
+print("[STAT:ci] 95% CI [-0.22, -0.08]")
+print("[STAT:effect_size] Cohen's d = 0.67 (medium)")
+print("[STAT:p_value] p = 0.0003")
+
+# 5. Robustness check
+print("[INDEPENDENT_CHECK] Bootstrap CI: [-0.23, -0.07] confirms result")
+
+# 6. NOW the finding is valid
+print("[FINDING] Premium customers show 15% lower churn rate (d=0.67, 95% CI [-0.22, -0.08], p<0.001)")
+
+# 7. Practical significance
+print("[SO_WHAT] This translates to ~$2.3M annual retention value")
+
+# 8. Limitations
+print("[LIMITATION] Observational data - cannot infer causation")
+```
+
+**Invalid Finding (Will Be Rejected):**
+
+```python
+# WRONG - No stats before finding
+print("[FINDING] Premium customers churn less")  # ❌ Rejected - no CI, no effect size
+
+# WRONG - Missing effect size
+print("[STAT:ci] 95% CI [-0.22, -0.08]")
+print("[FINDING] Premium customers churn less")  # ❌ Rejected - no effect size
+
+# WRONG - Missing CI
+print("[STAT:effect_size] Cohen's d = 0.67")
+print("[FINDING] Premium customers churn less")  # ❌ Rejected - no CI
+```
+
+### Hypothesis Status Updates
+
+As @jogyo tests hypotheses, update the register status:
+
+| Status | When to Set | Action |
+|--------|-------------|--------|
+| `pending` | Initial state | Hypothesis defined, not yet tested |
+| `tested` | After analysis complete | All stats calculated, awaiting interpretation |
+| `confirmed` | H0 rejected with evidence | H1 supported, finding is valid |
+| `rejected` | Failed to reject H0 | No significant effect found |
+
+**Example Status Update:**
+```python
+# After completing analysis
+print("[HYPOTHESIS:H1:status=confirmed] Premium churn effect verified (d=0.67, p<0.001)")
+print("[HYPOTHESIS:H2:status=rejected] Tenure effect not significant (p=0.23)")
+```
+
 ### Starting New Research
 
 When starting fresh research using the notebook-centric workflow:

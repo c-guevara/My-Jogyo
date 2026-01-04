@@ -9,18 +9,18 @@
 ## Phase 1: Agent Prompt Upgrades (Quick Wins - <1 day)
 
 ### 1.1 Gyoshu Professor Upgrade
-- [ ] 1. Add Hypothesis Register requirement to `src/agent/gyoshu.md`
-   - [ ] 1.1 Add "Mandatory: Hypothesis Register" section after discovery phase
-   - [ ] 1.2 Define hypothesis register YAML format (H0/H1, endpoint, alpha, correction_plan)
-   - [ ] 1.3 Add required stages table: hypothesis_register, assumptions_check, test_and_effect, robustness
-   - [ ] 1.4 Add stage verification checklist for validating Jogyo output
+- [x] 1. Add Hypothesis Register requirement to `src/agent/gyoshu.md`
+   - [x] 1.1 Add "Mandatory: Hypothesis Register" section after discovery phase
+   - [x] 1.2 Define hypothesis register YAML format (H0/H1, endpoint, alpha, correction_plan)
+   - [x] 1.3 Add required stages table: hypothesis_register, assumptions_check, test_and_effect, robustness
+   - [x] 1.4 Add stage verification checklist for validating Jogyo output
    **Parallelizable**: YES (with Tasks 2, 3, 4)
    **Effort**: 30 min
    **File**: `src/agent/gyoshu.md`
 
 ### 1.2 Jogyo TA Upgrade
-- [ ] 2. Add statistical evidence markers to `src/agent/jogyo.md`
-   - [ ] 2.1 Add "Statistical Evidence Markers (MANDATORY)" section with new markers:
+- [x] 2. Add statistical evidence markers to `src/agent/jogyo.md`
+   - [x] 2.1 Add "Statistical Evidence Markers (MANDATORY)" section with new markers:
       - [DECISION] - Test selection with justification
       - [CHECK:*] - Assumption verification (normality, homogeneity, independence)
       - [STAT:estimate] - Point estimate
@@ -30,41 +30,41 @@
       - [INDEPENDENT_CHECK] - Robustness verification
       - [SO_WHAT] - Practical significance explanation
       - [LIMITATION] - Threats to validity
-   - [ ] 2.2 Add "Finding Gating Rule" - CRITICAL: No [FINDING] without [STAT:ci] + [STAT:effect_size]
-   - [ ] 2.3 Add Python code templates for:
+   - [x] 2.2 Add "Finding Gating Rule" - CRITICAL: No [FINDING] without [STAT:ci] + [STAT:effect_size]
+   - [x] 2.3 Add Python code templates for:
       - Assumption checking (Shapiro-Wilk, Levene's)
       - Effect size calculation (Cohen's d, r², odds ratio)
       - CI calculation (parametric and bootstrap)
-   - [ ] 2.4 Add "ML Pipeline Stages (MANDATORY)" section with required stages:
+   - [x] 2.4 Add "ML Pipeline Stages (MANDATORY)" section with required stages:
       - baseline: Dummy classifier benchmark
       - cv: Cross-validation with mean ± std
       - tuning: Hyperparameter search with distribution
       - calibration: Probability calibration check
       - interpretation: SHAP/permutation importance
       - error_analysis: Failure mode analysis
-   - [ ] 2.5 Add ML code templates for each stage
+   - [x] 2.5 Add ML code templates for each stage
    **Parallelizable**: YES (with Tasks 1, 3, 4)
    **Effort**: 1 hour
    **File**: `src/agent/jogyo.md`
 
 ### 1.3 Baksa PhD Reviewer Upgrade
-- [ ] 3. Add statistical rigor challenges to `src/agent/baksa.md`
-   - [ ] 3.1 Add "Statistical Rigor Checklist (MANDATORY)" section with fail triggers:
+- [x] 3. Add statistical rigor challenges to `src/agent/baksa.md`
+   - [x] 3.1 Add "Statistical Rigor Checklist (MANDATORY)" section with fail triggers:
       - Missing H0/H1 → FAIL
       - Missing CI → FAIL
       - Missing effect size → FAIL
       - Missing multiple testing correction → FAIL (if >1 test)
-   - [ ] 3.2 Add automatic rejection triggers (trust score -30):
+   - [x] 3.2 Add automatic rejection triggers (trust score -30):
       - [FINDING] without [STAT:ci]
       - [FINDING] without [STAT:effect_size]
       - "Significant" claim without p-value
       - Correlation without scatterplot
-   - [ ] 3.3 Add "ML-Specific Challenges (MANDATORY)" section:
+   - [x] 3.3 Add "ML-Specific Challenges (MANDATORY)" section:
       - Baseline Challenge: "What's the dummy baseline?"
       - CV Challenge: "Show variance across folds"
       - Leakage Challenge: "Preprocessing before or after split?"
       - Interpretation Challenge: "Top 3 features and domain sense?"
-   - [ ] 3.4 Add ML trust score penalties table:
+   - [x] 3.4 Add ML trust score penalties table:
       - No baseline: -20
       - No CV: -25
       - No interpretation: -15
@@ -74,29 +74,29 @@
    **File**: `src/agent/baksa.md`
 
 ### 1.4 Jogyo Paper Writer Upgrade
-- [ ] 4. Add IMRAD structure to `src/agent/jogyo-paper-writer.md`
-   - [ ] 4.1 Add "IMRAD Report Structure (MANDATORY)" section:
+- [x] 4. Add IMRAD structure to `src/agent/jogyo-paper-writer.md`
+   - [x] 4.1 Add "IMRAD Report Structure (MANDATORY)" section:
       - Introduction: Research question, context
       - Methods: Data, tests, assumptions
       - Results: Effect sizes + CIs (verified findings only)
       - Analysis/Discussion: So What, limitations
       - Conclusion: Answer + recommendations
-   - [ ] 4.2 Add finding categorization rules:
+   - [x] 4.2 Add finding categorization rules:
       - Verified Findings: trust score ≥ 80
       - Partial Findings: trust score 60-79
       - Exploratory Notes: trust score < 60
-   - [ ] 4.3 Add "So What Integration (MANDATORY)" with transformation examples
-   - [ ] 4.4 Add "Limitations Section" requirements
+   - [x] 4.3 Add "So What Integration (MANDATORY)" with transformation examples
+   - [x] 4.4 Add "Limitations Section" requirements
    **Parallelizable**: YES (with Tasks 1, 2, 3)
    **Effort**: 30 min
    **File**: `src/agent/jogyo-paper-writer.md`
 
 ### 1.5 Update AGENTS.md Documentation
-- [ ] 5. Add new markers to `AGENTS.md`
-   - [ ] 5.1 Add "Statistical Evidence Markers" table
-   - [ ] 5.2 Add "ML Pipeline Markers" table
-   - [ ] 5.3 Add "Research Quality Standards" section
-   - [ ] 5.4 Update marker examples with new format
+- [x] 5. Add new markers to `AGENTS.md`
+   - [x] 5.1 Add "Statistical Evidence Markers" table
+   - [x] 5.2 Add "ML Pipeline Markers" table
+   - [x] 5.3 Add "Research Quality Standards" section
+   - [x] 5.4 Update marker examples with new format
    **Parallelizable**: NO (depends on Tasks 1-4)
    **Effort**: 20 min
    **File**: `AGENTS.md`
