@@ -409,6 +409,130 @@ Practical "so what"
 | **Partial Findings** | 60-79 | Findings (with caveats) |
 | **Exploratory Notes** | < 60 | Exploratory Observations |
 
+### How Quality Gates Work
+
+Quality gates are automated checks that run at research completion (via `gyoshu-completion` tool) to enforce statistical rigor. The system:
+
+1. **Scans notebook outputs** for structured markers
+2. **Validates findings** using the "Finding Gating Rule"
+3. **Validates ML pipelines** for required components
+4. **Calculates quality score** (100 - sum of penalties)
+5. **Categorizes findings** as Verified, Partial, or Exploratory
+
+#### The Finding Gating Rule
+
+Every `[FINDING]` marker must have supporting evidence within 10 lines BEFORE it:
+- `[STAT:ci]` - Confidence interval (required)
+- `[STAT:effect_size]` - Effect magnitude (required)
+
+If either is missing, the finding is marked as **unverified** and goes to "Exploratory Observations" in the report.
+
+#### Quality Score Calculation
+
+```
+Quality Score = 100 - (sum of all penalties)
+```
+
+| Violation | Penalty | Description |
+|-----------|---------|-------------|
+| `FINDING_NO_CI` | -30 | Finding without confidence interval |
+| `FINDING_NO_EFFECT_SIZE` | -30 | Finding without effect size |
+| `ML_NO_BASELINE` | -20 | ML metrics without baseline comparison |
+| `ML_NO_CV` | -25 | ML metrics without cross-validation |
+| `ML_NO_INTERPRETATION` | -15 | ML metrics without feature importance |
+
+#### Quality Gate Decision
+
+| Score Range | Status | Result |
+|-------------|--------|--------|
+| 100 | SUCCESS | All quality gates passed |
+| 80-99 | PARTIAL | Minor issues, findings still accepted |
+| 60-79 | PARTIAL | Some findings moved to exploratory |
+| 0-59 | PARTIAL | Significant quality issues |
+
+> **Note**: Quality gates never block completion, but they do affect how findings are categorized in reports.
+
+### Good vs Bad Findings: Examples
+
+Understanding the difference between verified and exploratory findings:
+
+#### BAD: Exploratory Finding (Missing Evidence)
+
+```python
+# ❌ This finding will be marked EXPLORATORY (score -60)
+print("[FINDING] Model accuracy is 95%")
+
+# Why it fails:
+# - No [STAT:ci] within 10 lines before
+# - No [STAT:effect_size] within 10 lines before
+```
+
+This produces:
+```
+Quality Score: 40/100
+Violations:
+  - FINDING_NO_CI: Missing confidence interval (-30)
+  - FINDING_NO_EFFECT_SIZE: Missing effect size (-30)
+Report Section: "Exploratory Observations" (not trusted)
+```
+
+#### GOOD: Verified Finding (Full Evidence)
+
+```python
+# ✅ This finding will be VERIFIED (score 100)
+
+# 1. Statistical evidence BEFORE the finding
+print(f"[STAT:estimate] accuracy = 0.95")
+print(f"[STAT:ci] 95% CI [0.93, 0.97]")
+print(f"[STAT:effect_size] Cohen's d = 0.82 (large improvement over baseline)")
+print(f"[STAT:p_value] p < 0.001")
+
+# 2. NOW state the finding with summary evidence
+print("[FINDING] Model (AUC=0.95) significantly outperforms baseline "
+      "(d=0.82, 95% CI [0.93, 0.97], p<0.001)")
+
+# 3. Explain practical significance
+print("[SO_WHAT] This means 40% fewer false negatives in fraud detection")
+```
+
+This produces:
+```
+Quality Score: 100/100
+Violations: None
+Report Section: "Key Findings" (trusted, verified)
+```
+
+#### ML Pipeline: Complete Example
+
+```python
+# ✅ Complete ML pipeline with all required markers
+
+# 1. Baseline comparison (REQUIRED)
+from sklearn.dummy import DummyClassifier
+dummy = DummyClassifier(strategy='stratified')
+dummy_scores = cross_val_score(dummy, X, y, cv=5)
+print(f"[METRIC:baseline_accuracy] {dummy_scores.mean():.3f}")
+
+# 2. Model cross-validation (REQUIRED)
+scores = cross_val_score(rf_model, X, y, cv=5)
+print(f"[METRIC:cv_accuracy_mean] {scores.mean():.3f}")
+print(f"[METRIC:cv_accuracy_std] {scores.std():.3f}")
+
+# 3. Feature interpretation (REQUIRED)
+importances = rf_model.feature_importances_
+print(f"[METRIC:feature_importance] age={importances[0]:.2f}, income={importances[1]:.2f}")
+
+# 4. Statistical evidence for finding
+improvement = scores.mean() - dummy_scores.mean()
+ci_low, ci_high = scores.mean() - 1.96*scores.std(), scores.mean() + 1.96*scores.std()
+print(f"[STAT:ci] 95% CI [{ci_low:.3f}, {ci_high:.3f}]")
+print(f"[STAT:effect_size] Improvement = {improvement:.3f} ({improvement/dummy_scores.std():.1f}σ)")
+
+# 5. Verified finding
+print(f"[FINDING] Random Forest achieves {scores.mean():.1%} accuracy, "
+      f"outperforming baseline by {improvement:.1%} (95% CI [{ci_low:.3f}, {ci_high:.3f}])")
+```
+
 ## Structured Output Markers
 
 When working with Gyoshu REPL output, use these markers:

@@ -8,7 +8,8 @@ import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
 import { durableAtomicWrite, fileExists, readFile } from "../lib/atomic-write";
 import { getLegacyManifestPath, getNotebookPath } from "../lib/paths";
-import { gatherReportContext, ReportContext } from "../lib/report-markdown";
+import { gatherReportContext, ReportContext, generateReport } from "../lib/report-markdown";
+import { exportToPdf, PdfExportResult } from "../lib/pdf-export";
 import { runQualityGates, QualityGateResult } from "../lib/quality-gates";
 import type { Notebook } from "../lib/cell-identity";
 
@@ -327,6 +328,16 @@ export default tool({
     let qualityGateResult: QualityGateResult | undefined;
     let adjustedStatus = status;
 
+    // Fix 1: SUCCESS status requires reportTitle for quality gate validation
+    if (status === "SUCCESS" && !reportTitle) {
+      adjustedStatus = "PARTIAL";
+      warnings.push({
+        code: "MISSING_REPORT_TITLE",
+        message: "SUCCESS status requires reportTitle for quality gate validation. Downgrading to PARTIAL.",
+        severity: "warning",
+      });
+    }
+
     if (status === "SUCCESS" && reportTitle) {
       try {
         const notebookPath = getNotebookPath(reportTitle);
@@ -353,7 +364,13 @@ export default tool({
           adjustedStatus = "PARTIAL";
         }
       } catch (e) {
-        console.warn(`Quality gate check failed: ${(e as Error).message}`);
+        // Fix 2: Don't swallow quality gate errors - downgrade to PARTIAL
+        adjustedStatus = "PARTIAL";
+        warnings.push({
+          code: "QUALITY_GATE_ERROR",
+          message: `Quality gate check failed: ${(e as Error).message}. Downgrading to PARTIAL.`,
+          severity: "warning",
+        });
       }
     }
 
@@ -393,9 +410,24 @@ export default tool({
     }
 
     let aiReportResult: AIReportResult | undefined;
+    let generatedReportPath: string | undefined;
+    let pdfExportResult: PdfExportResult | undefined;
     
     if (valid && adjustedStatus === "SUCCESS") {
       aiReportResult = await tryGatherAIContext(reportTitle);
+      
+      if (reportTitle) {
+        try {
+          const { reportPath } = await generateReport(reportTitle);
+          generatedReportPath = reportPath;
+          
+          if (exportPdf && reportPath) {
+            pdfExportResult = await exportToPdf(reportPath);
+          }
+        } catch (e) {
+          console.warn(`Report generation failed: ${(e as Error).message}`);
+        }
+      }
     }
 
     const response: Record<string, unknown> = {
@@ -427,7 +459,17 @@ export default tool({
 
     if (aiReportResult) {
       response.aiReport = aiReportResult;
-      if (aiReportResult.ready) {
+      if (generatedReportPath) {
+        response.reportPath = generatedReportPath;
+        let msg = `Completion signal recorded: ${adjustedStatus}. Report generated at ${generatedReportPath}`;
+        if (pdfExportResult?.success) {
+          response.pdfPath = pdfExportResult.pdfPath;
+          msg += `. PDF exported to ${pdfExportResult.pdfPath}`;
+        } else if (pdfExportResult && !pdfExportResult.success) {
+          response.pdfError = pdfExportResult.error;
+        }
+        response.message = msg;
+      } else if (aiReportResult.ready) {
         response.message = `Completion signal recorded: ${adjustedStatus}. IMPORTANT: Now invoke jogyo-paper-writer agent with the context below to generate the narrative report.`;
       }
     }

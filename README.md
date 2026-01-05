@@ -277,6 +277,39 @@ The TA uses structured markers to organize research output:
 
 ---
 
+## 🔬 Research Quality
+
+Gyoshu enforces **senior data scientist level** quality through automated quality gates. Every claim requires statistical evidence.
+
+### The Finding Gating Rule
+
+> ⚠️ **No `[FINDING]` is accepted without:**
+> - `[STAT:ci]` — Confidence interval (within 10 lines before)
+> - `[STAT:effect_size]` — Effect magnitude (within 10 lines before)
+
+Findings that fail these checks are downgraded to "Exploratory Observations" in reports.
+
+### Quality Standards
+
+| Requirement | Penalty if Missing | Why It Matters |
+|-------------|-------------------|----------------|
+| **CI for findings** | -30 trust | Point estimates without uncertainty are misleading |
+| **Effect size for findings** | -30 trust | Statistical significance ≠ practical significance |
+| **Baseline for ML** | -20 trust | Can't claim improvement without a reference point |
+| **Cross-validation for ML** | -25 trust | Single train/test split can be lucky |
+
+### Trust Score Thresholds
+
+| Score | Status | What Happens |
+|-------|--------|--------------|
+| ≥ 80 | ✅ Verified | Finding accepted as key result |
+| 60-79 | ⚠️ Partial | Accepted with caveats |
+| < 60 | ❌ Rejected | Marked as exploratory, requires rework |
+
+> **Learn more:** See [AGENTS.md](AGENTS.md) for complete marker reference and statistical requirements.
+
+---
+
 ## 🐍 Python Environment
 
 Gyoshu uses your project's `.venv/` virtual environment:

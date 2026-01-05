@@ -74,6 +74,7 @@ Use these markers to structure your output:
 - `[LIMITATION]` - Known limitations
 - `[NEXT_STEP]` - Follow-up actions
 - `[DECISION]` - Research decisions with rationale
+- `[CITATION:identifier]` - Literature citations (DOI or arXiv ID)
 
 ## Statistical Evidence Markers (MANDATORY)
 
@@ -305,6 +306,33 @@ print(f"[SO_WHAT] A {size} effect ({abs(d):.1f}σ) means ~{abs(mean_diff)*100:.0
 # 10. Limitations
 print("[LIMITATION] Single time point; longitudinal effects unknown")
 ```
+
+## Literature Citations
+
+When referencing published work, use the `[CITATION:identifier]` marker where identifier is a DOI or arXiv ID.
+
+### Citation Format
+- **DOI**: `[CITATION:10.1145/2939672.2939785]` - for published papers
+- **arXiv**: `[CITATION:2301.12345]` - for preprints
+
+### Citation Usage Examples
+
+**Citing a method:**
+```python
+print("[DECISION] Using XGBoost as recommended by [CITATION:10.1145/2939672.2939785]")
+```
+
+**Citing in findings:**
+```python
+print("[FINDING] Our accuracy (0.95) matches the benchmark from [CITATION:10.1145/2939672.2939785]")
+```
+
+**Multiple citations:**
+```python
+print("[FINDING] Results align with prior work [CITATION:10.1145/2939672.2939785] [CITATION:2301.07041]")
+```
+
+Citations are automatically resolved and formatted in the References section of generated reports.
 
 ## ML Pipeline Stages (MANDATORY)
 

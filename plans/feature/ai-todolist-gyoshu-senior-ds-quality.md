@@ -177,32 +177,32 @@
 ## Phase 3: Templates & Skills (1-2 days)
 
 ### 3.1 Create ML Rigor Skill
-- [ ] 11. Create `src/skill/ml-rigor/SKILL.md`
-   - [ ] 11.1 Baseline Requirements section:
+- [x] 11. Create `src/skill/ml-rigor/SKILL.md`
+   - [x] 11.1 Baseline Requirements section:
       - Always compare to DummyClassifier/DummyRegressor
       - Always compare to simple linear model
       - Report improvement over baseline with CI
-   - [ ] 11.2 Cross-Validation Requirements section:
+   - [x] 11.2 Cross-Validation Requirements section:
       - Use stratified K-fold for classification
       - Report mean ± std, not just mean
       - Calculate CI for mean performance
-   - [ ] 11.3 Hyperparameter Tuning section:
+   - [x] 11.3 Hyperparameter Tuning section:
       - Use RandomizedSearchCV or Bayesian
       - Report distribution of scores, not just best
       - Avoid overfitting to validation set
-   - [ ] 11.4 Calibration Requirements section:
+   - [x] 11.4 Calibration Requirements section:
       - Check calibration curve for probabilities
       - Report Brier score
       - Consider calibration if needed
-   - [ ] 11.5 Interpretation Requirements section:
+   - [x] 11.5 Interpretation Requirements section:
       - Permutation importance or SHAP
       - At least one case study (why this prediction?)
       - Verify features make domain sense
-   - [ ] 11.6 Error Analysis section:
+   - [x] 11.6 Error Analysis section:
       - Slice performance by key segments
       - Analyze failure modes
       - Check for systematic errors
-   - [ ] 11.7 Leakage Checklist:
+   - [x] 11.7 Leakage Checklist:
       - Time-based splits for temporal data
       - No target information in features
       - Preprocessing inside CV loop
@@ -211,20 +211,20 @@
    **File**: `src/skill/ml-rigor/SKILL.md`
 
 ### 3.2 Update Scientific Method Skill
-- [ ] 12. Update `src/skill/scientific-method/SKILL.md`
-   - [ ] 12.1 Add "Hypothesis-First Workflow" section:
+- [x] 12. Update `src/skill/scientific-method/SKILL.md`
+   - [x] 12.1 Add "Hypothesis-First Workflow" section:
       - State H0/H1 before looking at data
       - Define endpoints and alpha before analysis
       - Pre-register analysis plan
-   - [ ] 12.2 Add "Statistical Rigor Requirements" section:
+   - [x] 12.2 Add "Statistical Rigor Requirements" section:
       - Always report CI, not just point estimate
       - Always report effect size with interpretation
       - Use appropriate test for data type
-   - [ ] 12.3 Add "Multiple Comparison Correction" guide:
+   - [x] 12.3 Add "Multiple Comparison Correction" guide:
       - Bonferroni for small number of tests
       - BH-FDR for larger sets
       - Report both raw and adjusted p-values
-   - [ ] 12.4 Add "Effect Size Interpretation" table:
+   - [x] 12.4 Add "Effect Size Interpretation" table:
       - Cohen's d: 0.2 small, 0.5 medium, 0.8 large
       - r: 0.1 small, 0.3 medium, 0.5 large
       - Odds ratio: 1.5 small, 2.5 medium, 4.0 large
@@ -233,20 +233,20 @@
    **File**: `src/skill/scientific-method/SKILL.md`
 
 ### 3.3 Update Data Analysis Skill
-- [ ] 13. Update `src/skill/data-analysis/SKILL.md`
-   - [ ] 13.1 Add "Confidence Interval Patterns" section:
+- [x] 13. Update `src/skill/data-analysis/SKILL.md`
+   - [x] 13.1 Add "Confidence Interval Patterns" section:
       - Parametric CI for means
       - Bootstrap CI for medians/complex stats
       - Wilson CI for proportions
-   - [ ] 13.2 Add "Effect Size Calculation" code templates:
+   - [x] 13.2 Add "Effect Size Calculation" code templates:
       - Cohen's d for group comparisons
       - r² for correlations
       - Cliff's delta for non-parametric
-   - [ ] 13.3 Add "Assumption Checking" patterns:
+   - [x] 13.3 Add "Assumption Checking" patterns:
       - Normality: Shapiro-Wilk, Q-Q plot
       - Homogeneity: Levene's test
       - Independence: Durbin-Watson
-   - [ ] 13.4 Add "Robust Alternatives" section:
+   - [x] 13.4 Add "Robust Alternatives" section:
       - Welch's t-test instead of Student's
       - Mann-Whitney for non-normal
       - Permutation tests for complex designs
@@ -255,16 +255,16 @@
    **File**: `src/skill/data-analysis/SKILL.md`
 
 ### 3.4 Update Experiment Design Skill
-- [ ] 14. Update `src/skill/experiment-design/SKILL.md`
-   - [ ] 14.1 Add "Power Analysis" section:
+- [x] 14. Update `src/skill/experiment-design/SKILL.md`
+   - [x] 14.1 Add "Power Analysis" section:
       - Calculate required sample size
       - Use G*Power or statsmodels
       - Report achieved power
-   - [ ] 14.2 Add "Pre-registration Concept":
+   - [x] 14.2 Add "Pre-registration Concept":
       - Define analysis before seeing data
       - Distinguish confirmatory vs exploratory
       - Document deviations from plan
-   - [ ] 14.3 Add "Stopping Rules":
+   - [x] 14.3 Add "Stopping Rules":
       - Define success/failure criteria upfront
       - Avoid p-hacking through optional stopping
       - Consider sequential analysis methods
@@ -277,36 +277,36 @@
 ## Phase 4: Literature Integration MVP (2-3 days)
 
 ### 4.1 Create Literature Client
-- [ ] 15. Create `src/lib/literature-client.ts`
-   - [ ] 15.1 Define interfaces: Citation, SearchResult, LiteratureCache
-   - [ ] 15.2 Implement cache layer (JSON file in reports dir)
-   - [ ] 15.3 Implement Crossref API client:
+- [x] 15. Create `src/lib/literature-client.ts`
+   - [x] 15.1 Define interfaces: Citation, SearchResult, LiteratureCache
+   - [x] 15.2 Implement cache layer (JSON file in reports dir)
+   - [x] 15.3 Implement Crossref API client:
       - DOI → BibTeX/metadata
       - Title search → DOI list
       - Rate limiting (1 req/sec)
-   - [ ] 15.4 Implement arXiv API client:
+   - [x] 15.4 Implement arXiv API client:
       - Keyword search
       - Abstract retrieval
       - PDF URL extraction
    - [ ] 15.5 Implement Semantic Scholar client (optional, needs API key):
       - Related papers
       - Citation context
-   - [ ] 15.6 Add retry logic and error handling
+   - [x] 15.6 Add retry logic and error handling
    **Parallelizable**: NO (foundational for Phase 4)
    **Effort**: 3 hours
    **File**: `src/lib/literature-client.ts`
 
 ### 4.2 Create Literature Search Tool
-- [ ] 16. Create `src/tool/literature-search.ts`
-   - [ ] 16.1 Define tool schema: query, source (crossref/arxiv/semantic_scholar), limit
-   - [ ] 16.2 Implement search action:
+- [x] 16. Create `src/tool/literature-search.ts`
+   - [x] 16.1 Define tool schema: query, source (crossref/arxiv/semantic_scholar), limit
+   - [x] 16.2 Implement search action:
       - Search across configured sources
       - Return: title, authors, year, abstract, DOI, URL
       - Cache results locally
-   - [ ] 16.3 Implement cite action:
+   - [x] 16.3 Implement cite action:
       - DOI/arXiv ID → formatted citation
       - Support APA, BibTeX formats
-   - [ ] 16.4 Implement related action:
+   - [x] 16.4 Implement related action:
       - Find papers related to current research
       - Extract baseline metrics if available
    **Parallelizable**: NO (depends on Task 15)
@@ -314,20 +314,20 @@
    **File**: `src/tool/literature-search.ts`
 
 ### 4.3 Add Citation Marker Support
-- [ ] 17. Add [CITATION] marker to system
-   - [ ] 17.1 Update marker-parser.ts to recognize [CITATION:doi] format
-   - [ ] 17.2 Update report-markdown.ts to resolve citations
-   - [ ] 17.3 Add References section to report template
-   - [ ] 17.4 Update Jogyo prompt with citation examples
+- [x] 17. Add [CITATION] marker to system
+   - [x] 17.1 Update marker-parser.ts to recognize [CITATION:doi] format
+   - [x] 17.2 Update report-markdown.ts to resolve citations
+   - [x] 17.3 Add References section to report template
+   - [x] 17.4 Update Jogyo prompt with citation examples
    **Parallelizable**: NO (depends on Task 16)
    **Effort**: 1 hour
    **Files**: Multiple
 
 ### 4.4 Integrate Citations into Baksa
-- [ ] 18. Update Baksa to challenge uncited claims
-   - [ ] 18.1 Add "Known Results" challenge: "Source for this claim?"
-   - [ ] 18.2 Add "Baseline Reference" challenge for ML: "Published baseline for this dataset?"
-   - [ ] 18.3 Add trust score penalty (-10) for uncited "known" claims
+- [x] 18. Update Baksa to challenge uncited claims
+   - [x] 18.1 Add "Known Results" challenge: "Source for this claim?"
+   - [x] 18.2 Add "Baseline Reference" challenge for ML: "Published baseline for this dataset?"
+   - [x] 18.3 Add trust score penalty (-10) for uncited "known" claims
    **Parallelizable**: NO (depends on Tasks 16, 17)
    **Effort**: 30 min
    **File**: `src/agent/baksa.md`
@@ -337,11 +337,11 @@
 ## Phase 5: Testing & Validation (1-2 days)
 
 ### 5.1 Create Integration Tests
-- [ ] 19. Create quality gate integration tests
-   - [ ] 19.1 Test full pipeline with good research → SUCCESS
-   - [ ] 19.2 Test full pipeline with shallow research → PARTIAL
-   - [ ] 19.3 Test finding categorization in reports
-   - [ ] 19.4 Test IMRAD section validation
+- [x] 19. Create quality gate integration tests
+   - [x] 19.1 Test full pipeline with good research → SUCCESS
+   - [x] 19.2 Test full pipeline with shallow research → PARTIAL
+   - [x] 19.3 Test finding categorization in reports
+   - [x] 19.4 Test IMRAD section validation
    **Parallelizable**: NO (depends on all previous phases)
    **Effort**: 2 hours
    **File**: `tests/quality-gates-integration.test.ts`
@@ -359,19 +359,19 @@
    **Manual task**
 
 ### 5.3 Update Documentation
-- [ ] 21. Document new workflow in AGENTS.md
-   - [ ] 21.1 Add "Research Quality Standards" section
-   - [ ] 21.2 Add "Quality Gates" explanation
-   - [ ] 21.3 Update marker reference tables
-   - [ ] 21.4 Add examples of good vs bad findings
+- [x] 21. Document new workflow in AGENTS.md
+   - [x] 21.1 Add "Research Quality Standards" section
+   - [x] 21.2 Add "Quality Gates" explanation
+   - [x] 21.3 Update marker reference tables
+   - [x] 21.4 Add examples of good vs bad findings
    **Parallelizable**: NO (depends on validation)
    **Effort**: 1 hour
    **File**: `AGENTS.md`
 
-- [ ] 22. Update README with research quality section
-   - [ ] 22.1 Add "Research Quality" section explaining rigor
-   - [ ] 22.2 Add quality standards table
-   - [ ] 22.3 Update examples with new marker format
+- [x] 22. Update README with research quality section ✅ DONE
+   - [x] 22.1 Add "Research Quality" section explaining rigor
+   - [x] 22.2 Add quality standards table
+   - [x] 22.3 Update examples with new marker format
    **Parallelizable**: YES (with Task 21)
    **Effort**: 30 min
    **File**: `README.md`
@@ -380,12 +380,12 @@
 
 ## Success Criteria
 
-- [ ] Every [FINDING] has supporting [STAT:ci] + [STAT:effect_size]
-- [ ] ML outputs include baseline comparison + interpretation
-- [ ] Reports have all IMRAD sections (or explicit [SECTION MISSING])
-- [ ] Baksa rejects findings without statistical rigor (trust < 80)
-- [ ] Quality gates prevent shallow research from completing as SUCCESS
-- [ ] New research output demonstrates improvement over COVID example
+- [x] Every [FINDING] has supporting [STAT:ci] + [STAT:effect_size]
+- [x] ML outputs include baseline comparison + interpretation
+- [x] Reports have all IMRAD sections (or explicit [SECTION MISSING])
+- [x] Baksa rejects findings without statistical rigor (trust < 80)
+- [x] Quality gates prevent shallow research from completing as SUCCESS
+- [x] New research output demonstrates improvement over COVID example
 
 ---
 

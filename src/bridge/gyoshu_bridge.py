@@ -108,8 +108,12 @@ def make_error(code: int, message: str, data: Optional[Any] = None) -> Dict:
 #   [STEP] Loading data...
 #   [METRIC:accuracy] 0.95
 #   [PLOT:histogram] Distribution of values
+#   [CHALLENGE-RESPONSE:1] Response to adversarial challenge
+# Note: Hyphens in marker types are normalized to underscores for consistency
+#       with the TypeScript parser. Both [CHALLENGE-RESPONSE:1] and
+#       [CHALLENGE_RESPONSE:1] work identically.
 MARKER_REGEX = re.compile(
-    r"^\s*\[([A-Z][A-Z0-9_]*)(?::([^\]]+))?\]\s*(.*)$", re.MULTILINE
+    r"^\s*\[([A-Z][A-Z0-9_-]*)(?::([^\]]+))?\]\s*(.*)$", re.MULTILINE
 )
 
 # Scientific marker taxonomy
@@ -144,16 +148,23 @@ MARKER_CATEGORIES = {
     "PATTERN": "insights",
     # Workflow
     "STEP": "workflow",
+    "STAGE": "workflow",
+    "CHECKPOINT": "workflow",
     "CHECK": "workflow",
     "INFO": "workflow",
     "WARNING": "workflow",
     "ERROR": "workflow",
     "DEBUG": "workflow",
+    "REHYDRATED": "workflow",
     # Scientific
     "CITATION": "scientific",
     "LIMITATION": "scientific",
     "NEXT_STEP": "scientific",
     "DECISION": "scientific",
+    "SO_WHAT": "scientific",
+    "INDEPENDENT_CHECK": "scientific",
+    "CHALLENGE_RESPONSE": "scientific",
+    "VERIFICATION_CODE": "scientific",
 }
 
 
@@ -164,28 +175,71 @@ def parse_markers(text: str) -> List[Dict[str, Any]]:
         text: Raw output text potentially containing markers
 
     Returns:
-        List of marker dicts with type, subtype, content, line_number, category
+        List of marker dicts with type, subtype, attributes, content,
+        line_number, category, valid
+
+    Attribute Parsing:
+        For markers like [STAGE:begin:id=S01:stage=load_data], the attribute
+        string "begin:id=S01:stage=load_data" is split by ':' and parsed:
+        - Parts with '=' become key-value pairs in attributes dict
+        - First part without '=' becomes subtype
+        - Subsequent parts without '=' become attributes with empty string value
+
+    This matches the TypeScript marker-parser.ts behavior.
     """
     markers = []
 
     for match in MARKER_REGEX.finditer(text):
-        marker_type = match.group(1)
-        subtype = match.group(2)  # May be None
+        raw_type = match.group(1)
+        marker_type = raw_type.replace("-", "_")
+        attribute_str = match.group(2)  # May be None (e.g., "[STEP] content")
         content = match.group(3).strip()
+
+        # Parse attributes and subtype from attribute string
+        attributes: Dict[str, str] = {}
+        subtype: Optional[str] = None
+
+        if attribute_str:
+            # Special case: CITATION identifiers (DOIs, arXiv IDs) may contain colons
+            # e.g., [CITATION:10.1145/2939672.2939785] or [CITATION:arXiv:2301.12345]
+            # Treat the entire attribute_str as the subtype, don't split by colon
+            if marker_type == "CITATION":
+                subtype = attribute_str
+            else:
+                # Split by colon to handle multiple attributes
+                parts = attribute_str.split(":")
+                for part in parts:
+                    if "=" in part:
+                        # Key-value attribute (e.g., "id=S01")
+                        eq_index = part.index("=")
+                        key = part[:eq_index]
+                        value = part[eq_index + 1 :]
+                        attributes[key] = value
+                    else:
+                        # Simple subtype (first non-kv part) or additional attribute
+                        # Normalize hyphens to underscores for consistency
+                        if subtype is None:
+                            subtype = part.replace("-", "_")
+                        else:
+                            # Additional parts without '=' become attributes with empty values
+                            attributes[part] = ""
 
         # Calculate line number (1-indexed)
         line_number = text[: match.start()].count("\n") + 1
 
-        # Classify marker
+        # Classify marker and check validity
         category = MARKER_CATEGORIES.get(marker_type, "unknown")
+        valid = marker_type in MARKER_CATEGORIES
 
         markers.append(
             {
                 "type": marker_type,
                 "subtype": subtype,
+                "attributes": attributes,
                 "content": content,
                 "line_number": line_number,
                 "category": category,
+                "valid": valid,
             }
         )
 

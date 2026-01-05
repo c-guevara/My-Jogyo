@@ -463,7 +463,7 @@ describe("renderReportMarkdown", () => {
     expect(markdown).toContain("- H2: Model Y performs best");
   });
 
-  it("renders artifacts with sizes", () => {
+  it("embeds figures as markdown images", () => {
     const model: ReportModel = {
       title: "Test",
       hypotheses: [],
@@ -486,7 +486,42 @@ describe("renderReportMarkdown", () => {
     const markdown = renderReportMarkdown(model);
 
     expect(markdown).toContain("## Output Files");
-    expect(markdown).toContain("`figures/plot.png` (1 KB)");
+    expect(markdown).toContain("![plot](figures/plot.png)");
+    expect(markdown).toContain("*plot.png (1 KB)*");
+  });
+
+  it("renders non-figure artifacts as file links", () => {
+    const model: ReportModel = {
+      title: "Test",
+      hypotheses: [],
+      metrics: [],
+      findings: [],
+      limitations: [],
+      nextSteps: [],
+      artifacts: [
+        {
+          filename: "model.pkl",
+          relativePath: "models/model.pkl",
+          sizeBytes: 2048,
+          sizeFormatted: "2 KB",
+          type: "model",
+        },
+        {
+          filename: "data.csv",
+          relativePath: "exports/data.csv",
+          sizeBytes: 512,
+          sizeFormatted: "512 B",
+          type: "export",
+        },
+      ],
+      generatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    const markdown = renderReportMarkdown(model);
+
+    expect(markdown).toContain("## Output Files");
+    expect(markdown).toContain("- `exports/data.csv` (512 B) - export file");
+    expect(markdown).toContain("- `models/model.pkl` (2 KB) - model file");
   });
 
   it("includes sentinel blocks for each section", () => {

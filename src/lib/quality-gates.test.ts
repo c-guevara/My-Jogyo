@@ -144,6 +144,19 @@ Line 15
       expect(result.violations.length).toBe(2);
     });
 
+    test("hyphenated subtypes are normalized and work with quality gates", () => {
+      const text = `
+[STAT:ci] 95% CI [0.82, 0.94]
+[STAT:effect-size] Cohen's d = 0.75 (medium)
+[FINDING] Treatment shows significant effect
+`;
+      const result = validateFindings(text);
+
+      expect(result.violations.length).toBe(0);
+      expect(result.validation.total).toBe(1);
+      expect(result.validation.verified).toBe(1);
+    });
+
     test("no findings returns empty violations", () => {
       const text = `
 [OBJECTIVE] Analyze data

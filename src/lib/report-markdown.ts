@@ -24,6 +24,12 @@ import { parseMarkers, ParsedMarker, getMarkersByType } from "./marker-parser";
 import { Notebook, NotebookCell } from "./cell-identity";
 import { extractFrontmatter, GyoshuFrontmatter } from "./notebook-frontmatter";
 import { getNotebookPath, getReportDir, getReportReadmePath, getReportsRootDir } from "./paths";
+import { 
+  Citation, 
+  getCitationByDOI, 
+  getArxivPaper, 
+  formatCitationAPA 
+} from "./literature-client";
 
 // =============================================================================
 // FINDING VERIFICATION - Separate verified vs unverified findings
@@ -155,6 +161,123 @@ export function validateIMRADSections(
   return missing;
 }
 
+// =============================================================================
+// CITATION SUPPORT - Collect and resolve literature citations
+// =============================================================================
+
+/**
+ * A resolved citation ready for the References section.
+ */
+export interface ResolvedCitation {
+  /** Original identifier from the marker (DOI or arXiv ID) */
+  identifier: string;
+  /** Citation number in the report (1-indexed) */
+  number: number;
+  /** Resolved citation metadata (null if resolution failed) */
+  citation: Citation | null;
+  /** Formatted APA string (or fallback if resolution failed) */
+  formatted: string;
+}
+
+/**
+ * Determines if an identifier is an arXiv ID.
+ * arXiv IDs are typically: YYMM.NNNNN or older format like hep-ph/9901234
+ */
+function isArxivId(identifier: string): boolean {
+  // New format: YYMM.NNNNN (e.g., 2301.12345)
+  if (/^\d{4}\.\d{4,5}(v\d+)?$/i.test(identifier)) {
+    return true;
+  }
+  // Old format: category/YYMMNNN (e.g., hep-ph/9901234)
+  if (/^[a-z-]+\/\d{7}$/i.test(identifier)) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Extract citation markers and their identifiers from parsed markers.
+ *
+ * @param markers - Array of parsed markers
+ * @returns Array of unique citation identifiers in order of first appearance
+ */
+export function collectCitationIdentifiers(markers: ParsedMarker[]): string[] {
+  const citationMarkers = getMarkersByType(markers, "CITATION");
+  const identifiers: string[] = [];
+  const seen = new Set<string>();
+
+  for (const marker of citationMarkers) {
+    // The identifier is in the subtype (e.g., [CITATION:10.1145/2939672.2939785])
+    const identifier = marker.subtype?.trim();
+    if (identifier && !seen.has(identifier)) {
+      seen.add(identifier);
+      identifiers.push(identifier);
+    }
+  }
+
+  return identifiers;
+}
+
+/**
+ * Resolve citation identifiers to full citation metadata.
+ *
+ * Uses getCitationByDOI for DOIs and getArxivPaper for arXiv IDs.
+ * Failed resolutions return null citation with a fallback formatted string.
+ *
+ * @param identifiers - Array of citation identifiers (DOIs or arXiv IDs)
+ * @returns Array of resolved citations with formatted strings
+ */
+export async function resolveCitations(identifiers: string[]): Promise<ResolvedCitation[]> {
+  const results: ResolvedCitation[] = [];
+
+  for (let i = 0; i < identifiers.length; i++) {
+    const identifier = identifiers[i];
+    const number = i + 1;
+
+    try {
+      let citation: Citation | null = null;
+
+      if (isArxivId(identifier)) {
+        citation = await getArxivPaper(identifier);
+      } else {
+        // Assume it's a DOI
+        citation = await getCitationByDOI(identifier);
+      }
+
+      if (citation) {
+        results.push({
+          identifier,
+          number,
+          citation,
+          formatted: formatCitationAPA(citation),
+        });
+      } else {
+        // Resolution failed - provide fallback
+        results.push({
+          identifier,
+          number,
+          citation: null,
+          formatted: isArxivId(identifier)
+            ? `arXiv:${identifier}`
+            : `https://doi.org/${identifier}`,
+        });
+      }
+    } catch (error) {
+      // API error - provide fallback
+      results.push({
+        identifier,
+        number,
+        citation: null,
+        formatted: isArxivId(identifier)
+          ? `arXiv:${identifier}`
+          : `https://doi.org/${identifier}`,
+      });
+    }
+  }
+
+  return results;
+}
+
 export interface ArtifactEntry {
   filename: string;
   relativePath: string;
@@ -224,6 +347,7 @@ export interface ReportModel {
   generatedAt: string;
   executionHistory?: ExecutionHistoryEntry[];
   missingSections?: RequiredSection[];
+  citations?: ResolvedCitation[];
 }
 
 const SENTINEL_BEGIN = (name: string) => `<!-- GYOSHU:REPORT:${name}:BEGIN -->`;
@@ -497,10 +621,18 @@ export function renderReportMarkdown(model: ReportModel): string {
       return order[a.type] - order[b.type];
     });
 
-    for (let i = 0; i < sorted.length; i++) {
-      const a = sorted[i];
-      const desc = a.description || `${a.type} file`;
-      lines.push(`${i + 1}. \`${a.relativePath}\` (${a.sizeFormatted}) - ${desc}`);
+    for (const a of sorted) {
+      if (a.type === "figure") {
+        // Embed figures as images for direct viewing in markdown
+        const altText = a.description || path.basename(a.filename, path.extname(a.filename));
+        lines.push(`![${altText}](${a.relativePath})`);
+        lines.push(`*${a.filename} (${a.sizeFormatted})*`);
+        lines.push("");
+      } else {
+        // Keep other artifacts as file links
+        const desc = a.description || `${a.type} file`;
+        lines.push(`- \`${a.relativePath}\` (${a.sizeFormatted}) - ${desc}`);
+      }
     }
     lines.push("");
     lines.push(SENTINEL_END("ARTIFACTS"));
@@ -555,6 +687,18 @@ export function renderReportMarkdown(model: ReportModel): string {
     lines.push("");
   }
 
+  if (model.citations && model.citations.length > 0) {
+    lines.push(SENTINEL_BEGIN("REFERENCES"));
+    lines.push("## References");
+    lines.push("");
+    for (const citation of model.citations) {
+      lines.push(`${citation.number}. ${citation.formatted}`);
+    }
+    lines.push("");
+    lines.push(SENTINEL_END("REFERENCES"));
+    lines.push("");
+  }
+
   if (model.conclusion) {
     lines.push(SENTINEL_BEGIN("CONCLUSION"));
     lines.push("## Conclusion");
@@ -592,6 +736,12 @@ export async function generateReport(
   const artifacts = await scanOutputsDirectory(reportDir);
 
   const model = buildReportModel(frontmatter, markers, artifacts);
+
+  const citationIdentifiers = collectCitationIdentifiers(markers);
+  if (citationIdentifiers.length > 0) {
+    model.citations = await resolveCitations(citationIdentifiers);
+  }
+
   const markdown = renderReportMarkdown(model);
 
   await fs.mkdir(reportDir, { recursive: true });

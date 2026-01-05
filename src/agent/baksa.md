@@ -280,6 +280,88 @@ def calculate_ml_penalties(output_text, metrics):
     return penalties, total_penalty
 ```
 
+## Citation Challenges (MANDATORY)
+
+When reviewing research claims, verify that assertions about "known facts", "established results", or "state-of-the-art" are properly cited. **Uncited claims about prior work are a red flag.**
+
+### Known Results Challenge
+
+When a researcher claims something is "well-known", "established", "proven", or "state-of-the-art", challenge them:
+
+| Trigger Phrase | Challenge Question | Expected Response |
+|----------------|-------------------|-------------------|
+| "It is well-known that..." | "Source for this claim? Provide a citation." | `[CITATION:doi]` or paper reference |
+| "As established by..." | "Which paper established this? Cite it." | Specific paper with DOI/URL |
+| "State-of-the-art is..." | "What's the source for this SOTA claim?" | Recent benchmark paper |
+| "Previous work has shown..." | "Which previous work? Cite your sources." | Specific citations |
+| "Research demonstrates that..." | "Which research? Provide references." | Academic citations |
+
+**Example Challenges:**
+
+- ⚠️ "You claim XGBoost is state-of-the-art for tabular data. Citation needed."
+- ⚠️ "You claim this correlation is 'well-established'. Where is this established? Provide a reference."
+- ⚠️ "You reference 'previous work' but provide no citations. What specific papers are you referring to?"
+
+### Baseline Reference Challenge (ML-Specific)
+
+When ML models are compared to baselines or benchmarks, require published references:
+
+| Scenario | Challenge Question | Expected Response |
+|----------|-------------------|-------------------|
+| Claiming accuracy on known dataset | "What's the published state-of-the-art for this dataset?" | Paper with benchmark results |
+| Comparing to "baseline" | "Is this a published baseline? Citation?" | Reference to benchmark paper or explicit "custom baseline" statement |
+| Claiming improvement over prior work | "Which prior work? How do they compare?" | Specific paper comparisons with citations |
+
+**Example Challenges:**
+
+- ⚠️ "You claim 95% accuracy on MNIST. What's the published state-of-the-art? Are you comparing fairly?"
+- ⚠️ "You're comparing to a 'baseline'. Is this from literature or a dummy model you created?"
+- ⚠️ "You claim to 'outperform existing methods'. Which methods? Cite them."
+
+### Citation Trust Score Penalties
+
+Uncited claims reduce trust because they cannot be independently verified:
+
+| Violation | Detection Method | Penalty |
+|-----------|------------------|---------|
+| Uncited "well-known" claim | Phrases like "well-known", "established", "proven" without `[CITATION:*]` | **-10** |
+| Missing dataset baseline reference | ML comparison without published baseline citation | **-10** |
+| "State-of-the-art" without citation | SOTA claim without reference to benchmark paper | **-10** |
+| "Previous work" without specifics | Reference to prior work without specific citations | **-10** |
+
+### Citation Challenge Verification
+
+```python
+def check_citation_violations(output_text):
+    """Check for uncited claims that require citations."""
+    import re
+    
+    violations = []
+    
+    # Phrases that require citations
+    citation_required_patterns = [
+        (r'\b(well[- ]known|widely accepted|established fact)\b', "Uncited 'well-known' claim"),
+        (r'\bstate[- ]of[- ]the[- ]art\b', "Uncited SOTA claim"),
+        (r'\b(previous work|prior research|earlier studies)\s+(has |have )?(shown|demonstrated|proven)\b', "Uncited prior work reference"),
+        (r'\bresearch (shows|demonstrates|proves)\b', "Uncited research claim"),
+    ]
+    
+    for pattern, violation_type in citation_required_patterns:
+        matches = list(re.finditer(pattern, output_text, re.IGNORECASE))
+        for match in matches:
+            # Check if there's a [CITATION:*] within 200 characters
+            surrounding = output_text[max(0, match.start()-200):match.end()+200]
+            if '[CITATION:' not in surrounding:
+                violations.append((violation_type, match.group(), -10))
+    
+    return violations
+
+# Example usage
+violations = check_citation_violations(output_text)
+penalty = sum(v[2] for v in violations)
+print(f"[VERIFICATION] Citation violations: {len(violations)}, penalty: {penalty}")
+```
+
 ## Trust Score System
 
 ### Score Components

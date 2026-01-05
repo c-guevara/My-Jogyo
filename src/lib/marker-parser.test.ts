@@ -71,6 +71,13 @@ describe('marker-parser', () => {
       expect(MARKER_TAXONOMY.VERIFICATION_CODE.category).toBe('SCIENTIFIC');
       expect(MARKER_TAXONOMY.VERIFICATION_CODE.description).toContain('Reproducible');
     });
+
+    test('includes CITATION marker with format documentation', () => {
+      expect(MARKER_TAXONOMY.CITATION).toBeDefined();
+      expect(MARKER_TAXONOMY.CITATION.category).toBe('SCIENTIFIC');
+      expect(MARKER_TAXONOMY.CITATION.description).toContain('DOI');
+      expect(MARKER_TAXONOMY.CITATION.description).toContain('arXiv');
+    });
   });
 
   describe('parseMarkers', () => {
@@ -81,6 +88,26 @@ describe('marker-parser', () => {
       expect(result.markers.length).toBe(1);
       expect(result.markers[0].type).toBe('OBJECTIVE');
       expect(result.markers[0].content).toBe('Analyze customer churn');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('parses markers with leading whitespace', () => {
+      const text = `  [FINDING] Result with leading spaces`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('FINDING');
+      expect(result.markers[0].content).toBe('Result with leading spaces');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('parses markers with tab indentation', () => {
+      const text = `\t[STAT:ci] 95% CI [0.82, 0.94]`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('STAT');
+      expect(result.markers[0].subtype).toBe('ci');
       expect(result.markers[0].valid).toBe(true);
     });
 
@@ -245,12 +272,105 @@ describe('marker-parser', () => {
       expect(result.markers[0].valid).toBe(true);
     });
 
+    test('normalizes hyphenated markers to underscore form', () => {
+      const text = `[CHALLENGE-RESPONSE:1] Re-verified correlation`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('CHALLENGE_RESPONSE');
+      expect(result.markers[0].subtype).toBe('1');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('normalizes VERIFICATION-CODE to VERIFICATION_CODE', () => {
+      const text = `[VERIFICATION-CODE] df['accuracy'].mean() == 0.95`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('VERIFICATION_CODE');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('normalizes INDEPENDENT-CHECK to INDEPENDENT_CHECK', () => {
+      const text = `[INDEPENDENT-CHECK] 5-fold CV confirms accuracy`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('INDEPENDENT_CHECK');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('normalizes hyphenated subtypes to underscores (effect-size → effect_size)', () => {
+      const text = `[STAT:effect-size] Cohen's d = 0.75 (medium)`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('STAT');
+      expect(result.markers[0].subtype).toBe('effect_size');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('normalizes hyphenated subtypes with multiple hyphens (p-value → p_value)', () => {
+      const text = `[STAT:p-value] p = 0.003`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('STAT');
+      expect(result.markers[0].subtype).toBe('p_value');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
     test('parses DECISION marker', () => {
       const text = `[DECISION] Using Welch's t-test: two independent groups, unequal variance`;
       const result = parseMarkers(text);
       
       expect(result.markers.length).toBe(1);
       expect(result.markers[0].type).toBe('DECISION');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('parses CITATION marker with DOI', () => {
+      const text = `[CITATION:10.1145/2939672.2939785] XGBoost reference`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('CITATION');
+      expect(result.markers[0].subtype).toBe('10.1145/2939672.2939785');
+      expect(result.markers[0].content).toBe('XGBoost reference');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('parses CITATION marker with arXiv ID', () => {
+      const text = `[CITATION:2301.12345] Transformer paper`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('CITATION');
+      expect(result.markers[0].subtype).toBe('2301.12345');
+      expect(result.markers[0].content).toBe('Transformer paper');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('parses CITATION marker with arXiv prefix containing colon', () => {
+      const text = `[CITATION:arXiv:2301.12345] Transformer paper`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('CITATION');
+      expect(result.markers[0].subtype).toBe('arXiv:2301.12345');
+      expect(result.markers[0].attributes).toEqual({});
+      expect(result.markers[0].content).toBe('Transformer paper');
+      expect(result.markers[0].valid).toBe(true);
+    });
+
+    test('parses CITATION with DOI containing multiple colons', () => {
+      const text = `[CITATION:doi:10.1145/2939672.2939785] XGBoost paper`;
+      const result = parseMarkers(text);
+      
+      expect(result.markers.length).toBe(1);
+      expect(result.markers[0].type).toBe('CITATION');
+      expect(result.markers[0].subtype).toBe('doi:10.1145/2939672.2939785');
+      expect(result.markers[0].attributes).toEqual({});
       expect(result.markers[0].valid).toBe(true);
     });
 

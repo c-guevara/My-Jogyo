@@ -118,6 +118,158 @@ Line 3 no marker
         assert len(markers) == 1
         assert markers[0]["subtype"] == "scatter_matrix_2d"
 
+    def test_marker_with_hyphen_normalized_to_underscore(self):
+        text = "[CHALLENGE-RESPONSE:1] Re-verified correlation"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "CHALLENGE_RESPONSE"
+        assert markers[0]["subtype"] == "1"
+        assert markers[0]["content"] == "Re-verified correlation"
+        assert markers[0]["category"] == "scientific"
+
+    def test_marker_with_hyphen_and_underscore_equivalent(self):
+        text1 = "[CHALLENGE-RESPONSE:2] Response A"
+        text2 = "[CHALLENGE_RESPONSE:2] Response B"
+
+        markers1 = parse_markers(text1)
+        markers2 = parse_markers(text2)
+
+        assert markers1[0]["type"] == markers2[0]["type"] == "CHALLENGE_RESPONSE"
+        assert markers1[0]["category"] == markers2[0]["category"] == "scientific"
+
+    def test_marker_independent_check_with_hyphen(self):
+        text = "[INDEPENDENT-CHECK] Bootstrap confirms result"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "INDEPENDENT_CHECK"
+        assert markers[0]["category"] == "scientific"
+
+    def test_subtype_hyphen_normalized_to_underscore(self):
+        text = "[STAT:effect-size] Cohen's d = 0.75"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "STAT"
+        assert markers[0]["subtype"] == "effect_size"
+        assert markers[0]["content"] == "Cohen's d = 0.75"
+
+    def test_subtype_with_multiple_hyphens_normalized(self):
+        text = "[METRIC:cross-val-accuracy] 0.95"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["subtype"] == "cross_val_accuracy"
+
+    def test_marker_with_attributes_key_value(self):
+        text = "[STAGE:begin:id=S01:stage=load_data] Loading..."
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "STAGE"
+        assert markers[0]["subtype"] == "begin"
+        assert markers[0]["attributes"] == {"id": "S01", "stage": "load_data"}
+        assert markers[0]["content"] == "Loading..."
+        assert markers[0]["valid"] is True
+
+    def test_marker_with_only_key_value_no_subtype(self):
+        text = "[CHECKPOINT:id=ckpt-001:stage=S02] Saved"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "CHECKPOINT"
+        assert markers[0]["subtype"] is None
+        assert markers[0]["attributes"] == {"id": "ckpt-001", "stage": "S02"}
+        assert markers[0]["content"] == "Saved"
+
+    def test_marker_with_subtype_and_single_attribute(self):
+        text = "[CHECKPOINT:saved:id=ckpt-002] Checkpoint saved"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "CHECKPOINT"
+        assert markers[0]["subtype"] == "saved"
+        assert markers[0]["attributes"] == {"id": "ckpt-002"}
+
+    def test_marker_attributes_empty_dict_when_simple_subtype(self):
+        text = "[METRIC:accuracy] 0.95"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["attributes"] == {}
+
+    def test_marker_no_attributes_no_subtype(self):
+        text = "[FINDING] Key discovery here"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["subtype"] is None
+        assert markers[0]["attributes"] == {}
+
+    def test_marker_valid_field_true_for_known_type(self):
+        text = "[OBJECTIVE] Research goal"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["valid"] is True
+
+    def test_marker_valid_field_false_for_unknown_type(self):
+        text = "[CUSTOM_UNKNOWN] Some content"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["valid"] is False
+        assert markers[0]["category"] == "unknown"
+
+    def test_marker_multiple_subtypes_become_attributes(self):
+        text = "[STAGE:begin:extra:more] Content"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["subtype"] == "begin"
+        assert markers[0]["attributes"] == {"extra": "", "more": ""}
+
+    def test_marker_rehydrated_with_from_attribute(self):
+        text = "[REHYDRATED:from=ckpt-001] Session restored"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "REHYDRATED"
+        assert markers[0]["subtype"] is None
+        assert markers[0]["attributes"] == {"from": "ckpt-001"}
+        assert markers[0]["valid"] is True
+
+    def test_citation_with_doi_containing_colons(self):
+        text = "[CITATION:10.1145/2939672.2939785] XGBoost paper"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "CITATION"
+        assert markers[0]["subtype"] == "10.1145/2939672.2939785"
+        assert markers[0]["attributes"] == {}
+        assert markers[0]["valid"] is True
+
+    def test_citation_with_arxiv_prefix_containing_colon(self):
+        text = "[CITATION:arXiv:2301.12345] Transformer paper"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "CITATION"
+        assert markers[0]["subtype"] == "arXiv:2301.12345"
+        assert markers[0]["attributes"] == {}
+        assert markers[0]["valid"] is True
+
+    def test_citation_with_doi_prefix_containing_multiple_colons(self):
+        text = "[CITATION:doi:10.1145/2939672.2939785] Another paper"
+        markers = parse_markers(text)
+
+        assert len(markers) == 1
+        assert markers[0]["type"] == "CITATION"
+        assert markers[0]["subtype"] == "doi:10.1145/2939672.2939785"
+        assert markers[0]["attributes"] == {}
+        assert markers[0]["valid"] is True
+
 
 class TestMemoryUtils:
     """Tests for memory utility functions."""

@@ -183,6 +183,11 @@ export const MARKER_TAXONOMY: Record<string, MarkerDefinition> = {
     category: 'ARTIFACTS',
     description: 'Tabular output or formatted data',
   },
+  FIGURE: {
+    name: 'FIGURE',
+    category: 'ARTIFACTS',
+    description: 'Saved figure or image file',
+  },
 
   // Insights - Discoveries and interpretations
   FINDING: {
@@ -237,6 +242,11 @@ export const MARKER_TAXONOMY: Record<string, MarkerDefinition> = {
     category: 'WORKFLOW',
     description: 'Error messages for failures',
   },
+  DEBUG: {
+    name: 'DEBUG',
+    category: 'WORKFLOW',
+    description: 'Debug messages for development',
+  },
   REHYDRATED: {
     name: 'REHYDRATED',
     category: 'WORKFLOW',
@@ -247,7 +257,7 @@ export const MARKER_TAXONOMY: Record<string, MarkerDefinition> = {
   CITATION: {
     name: 'CITATION',
     category: 'SCIENTIFIC',
-    description: 'References to papers, datasets, or sources',
+    description: 'Literature citations. Format: [CITATION:identifier] where identifier is a DOI (e.g., 10.1145/2939672.2939785) or arXiv ID (e.g., 2301.12345)',
   },
   LIMITATION: {
     name: 'LIMITATION',
@@ -293,12 +303,18 @@ export const MARKER_TAXONOMY: Record<string, MarkerDefinition> = {
  *     or: [MARKER_TYPE:subtype] content
  *     or: [MARKER_TYPE:key=value:key2=value2] content
  * 
+ * Leading whitespace is allowed to match Python bridge behavior.
+ * Examples: "  [FINDING] text" and "[FINDING] text" both match.
+ * 
  * Captures:
- * 1. Marker type (uppercase letters and underscores)
+ * 1. Marker type (uppercase letters, underscores, and hyphens)
  * 2. Optional attributes string (everything between : and ])
  * 3. Content after the marker
+ * 
+ * Note: Hyphens in marker types are normalized to underscores for taxonomy lookup.
+ * This allows both [CHALLENGE-RESPONSE:1] and [CHALLENGE_RESPONSE:1] to work.
  */
-const MARKER_REGEX = /^\[([A-Z_]+)(?::([^\]]+))?\]\s*(.*)$/;
+const MARKER_REGEX = /^\s*\[([A-Z][A-Z0-9_-]*)(?::([^\]]+))?\]\s*(.*)$/;
 
 /**
  * Parse markers from text output.
@@ -335,27 +351,28 @@ export function parseMarkers(text: string): ParseResult {
     const match = line.match(MARKER_REGEX);
 
     if (match) {
-      const [, type, attributeStr, content] = match;
+      const [, rawType, attributeStr, content] = match;
+      // Normalize hyphens to underscores for taxonomy lookup
+      const type = rawType.replace(/-/g, '_');
       const attributes: Record<string, string> = {};
       let subtype: string | undefined;
 
       // Parse attributes if present
       if (attributeStr) {
-        // Split by colon to handle multiple attributes
-        const parts = attributeStr.split(':');
-        for (const part of parts) {
-          if (part.includes('=')) {
-            // Key-value attribute
-            const eqIndex = part.indexOf('=');
-            const key = part.slice(0, eqIndex);
-            const value = part.slice(eqIndex + 1);
-            attributes[key] = value;
-          } else {
-            // Simple subtype (first non-kv part)
-            if (subtype === undefined) {
-              subtype = part;
+        // CITATION identifiers (DOIs, arXiv) may contain colons - don't split
+        if (type === 'CITATION') {
+          subtype = attributeStr;
+        } else {
+          const parts = attributeStr.split(':');
+          for (const part of parts) {
+            if (part.includes('=')) {
+              const eqIndex = part.indexOf('=');
+              const key = part.slice(0, eqIndex);
+              const value = part.slice(eqIndex + 1);
+              attributes[key] = value;
+            } else if (subtype === undefined) {
+              subtype = part.replace(/-/g, '_');
             } else {
-              // Additional subtypes become attributes with empty values
               attributes[part] = '';
             }
           }
@@ -372,7 +389,7 @@ export function parseMarkers(text: string): ParseResult {
         type,
         subtype,
         attributes,
-        content,
+        content: content.trim(),
         lineNumber: i + 1,
         valid,
       });
