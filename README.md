@@ -49,7 +49,7 @@ Think of it like a research lab:
 ### Option 1: curl (Recommended)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/My-Jogyo/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/My-Jogyo/refs/heads/main/install.sh | bash
 ```
 
 ### Option 2: Clone & Install
