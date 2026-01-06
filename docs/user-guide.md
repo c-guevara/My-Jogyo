@@ -6,7 +6,7 @@
 
 **Prerequisites:**
 - OpenCode installed ([get it here](https://github.com/opencode-ai/opencode))
-- Gyoshu installed (`curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/My-Jogyo/main/install.sh | bash`)
+- Gyoshu installed (add `"gyoshu"` to `plugin` array in `opencode.json`)
 
 ---
 

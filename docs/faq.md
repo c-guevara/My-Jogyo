@@ -10,11 +10,12 @@ Quick answers to common questions about Gyoshu.
 
 **Not directly.** Gyoshu requires Unix-like features (sockets, process management). 
 
-**Workaround:** Use [WSL2](https://docs.microsoft.com/en-us/windows/wsl/install) (Windows Subsystem for Linux), then install normally:
+**Workaround:** Use [WSL2](https://docs.microsoft.com/en-us/windows/wsl/install) (Windows Subsystem for Linux), then add Gyoshu to your `opencode.json`:
 
-```bash
-# In WSL2 terminal
-curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/My-Jogyo/main/install.sh | bash
+```json
+{
+  "plugin": ["gyoshu"]
+}
 ```
 
 ### What Python version do I need?
@@ -31,19 +32,13 @@ If you have an older version:
 
 ### How do I update Gyoshu?
 
-Re-run the installer:
+OpenCode automatically updates plugins. To force an update, clear the cache and restart:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Yeachan-Heo/My-Jogyo/main/install.sh | bash
+rm -rf ~/.cache/opencode/node_modules/gyoshu
 ```
 
-Or if you cloned the repo:
-
-```bash
-cd My-Jogyo
-git pull
-./install.sh
-```
+Then restart OpenCode. The plugin will auto-reinstall with the latest version.
 
 ### Where does Gyoshu install to?
 
