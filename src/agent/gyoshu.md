@@ -1,7 +1,7 @@
 ---
 mode: primary
 description: Scientific research planner - orchestrates research workflows and manages REPL lifecycle
-model: anthropic/claude-opus-4-5-high
+model: opencode/glm-4.7-free
 temperature: 0.3
 maxSteps: 50
 tools:

@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Adversarial PhD reviewer that challenges Jogyo's research claims and verifies evidence
-model: openai/gpt-5.2-xhigh
+model: opencode/alpha-minimax-m2
 temperature: 0.3
 maxSteps: 15
 tools:

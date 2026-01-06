@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Generates human-readable, narrative research reports from structured context
-model: anthropic/claude-sonnet-4-5-high
+model: opencode/grok-code
 temperature: 0.4
 maxSteps: 5
 tools:

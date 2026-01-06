@@ -18,6 +18,46 @@ Gyoshu is a scientific research agent extension for OpenCode. It provides:
 | **Baksa** | PhD Reviewer | 박사 | Adversarial verifier - challenges claims, calculates trust scores |
 | **Jogyo Paper Writer** | Grad Student | 조교 | Transforms raw findings into narrative research reports |
 
+## Model Configuration
+
+Gyoshu uses free OpenCode models by default for zero-configuration setup:
+
+| Agent | Default Model | Role |
+|-------|---------------|------|
+| **Gyoshu** | `opencode/glm-4.7-free` | Research planner |
+| **Baksa** | `opencode/alpha-minimax-m2` | Adversarial verifier |
+| **Jogyo** | `opencode/grok-code` | Research executor |
+| **Jogyo Paper Writer** | `opencode/grok-code` | Report writer |
+| **Jogyo Feedback** | `opencode/grok-code` | Feedback explorer |
+| **Jogyo Insight** | `opencode/grok-code` | Evidence gatherer |
+
+### Recommended Models for Maximum Performance
+
+For best research quality, we recommend using Anthropic's Claude models:
+
+| Agent | Recommended Model | Why |
+|-------|-------------------|-----|
+| **Gyoshu** | `anthropic/claude-opus-4-5-high` | Complex research planning requires top-tier reasoning |
+| **Baksa** | `anthropic/claude-opus-4-5-high` | Adversarial verification needs strong critical thinking |
+| **Jogyo** | `anthropic/claude-sonnet-4-5-high` | Balanced capability for code execution |
+| **Jogyo subagents** | `anthropic/claude-sonnet-4-5-high` | Consistent quality across tasks |
+
+### Changing Models
+
+To change an agent's model, edit the `model:` field in the YAML frontmatter of `src/agent/{agent-name}.md`:
+
+```yaml
+---
+mode: subagent
+description: ...
+model: anthropic/claude-sonnet-4-5-high  # Change this line
+temperature: 0.3
+...
+---
+```
+
+> **Note**: The default free models work out-of-the-box. Premium models (Anthropic, OpenAI) require API keys configured in OpenCode.
+
 ## Build & Test Commands
 
 ### Python Tests (pytest)

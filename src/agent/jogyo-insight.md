@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Gathers evidence from previous notebooks, URLs, and documentation for research support
-model: anthropic/claude-sonnet-4-5-high
+model: opencode/grok-code
 temperature: 0.3
 maxSteps: 15
 tools:

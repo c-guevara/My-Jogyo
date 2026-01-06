@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Scientific research agent with Python REPL and structured output markers
-model: anthropic/claude-sonnet-4-5-high
+model: opencode/grok-code
 temperature: 0.2
 maxSteps: 50
 tools:

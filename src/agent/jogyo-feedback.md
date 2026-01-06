@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Explores retrospective feedback to extract lessons and patterns for research improvement
-model: anthropic/claude-sonnet-4-5-high
+model: opencode/grok-code
 temperature: 0.3
 maxSteps: 10
 tools:
