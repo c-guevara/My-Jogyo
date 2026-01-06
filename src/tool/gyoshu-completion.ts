@@ -413,7 +413,9 @@ export default tool({
     let generatedReportPath: string | undefined;
     let pdfExportResult: PdfExportResult | undefined;
     
-    if (valid && adjustedStatus === "SUCCESS") {
+    // Generate report for both SUCCESS and PARTIAL completions
+    // PARTIAL still produces valuable artifacts that should be documented
+    if (valid && (adjustedStatus === "SUCCESS" || adjustedStatus === "PARTIAL")) {
       aiReportResult = await tryGatherAIContext(reportTitle);
       
       if (reportTitle) {
@@ -421,7 +423,8 @@ export default tool({
           const { reportPath } = await generateReport(reportTitle);
           generatedReportPath = reportPath;
           
-          if (exportPdf && reportPath) {
+          // Only export PDF for SUCCESS (fully validated research)
+          if (exportPdf && reportPath && adjustedStatus === "SUCCESS") {
             pdfExportResult = await exportToPdf(reportPath);
           }
         } catch (e) {
