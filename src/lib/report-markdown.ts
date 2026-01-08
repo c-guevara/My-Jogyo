@@ -19,11 +19,13 @@
  */
 
 import * as fs from "fs/promises";
+import * as fsSync from "fs";
 import * as path from "path";
 import { parseMarkers, ParsedMarker, getMarkersByType } from "./marker-parser";
+import { durableAtomicWrite, readFileNoFollow } from "./atomic-write";
 import { Notebook, NotebookCell } from "./cell-identity";
 import { extractFrontmatter, GyoshuFrontmatter } from "./notebook-frontmatter";
-import { getNotebookPath, getReportDir, getReportReadmePath, getReportsRootDir } from "./paths";
+import { getNotebookPath, getReportDir, getReportReadmePath, getReportsRootDir, ensureDirSync } from "./paths";
 // Literature client deprecated - citations now use fallback identifiers only
 // TODO: Re-enable when a reliable citation API is available
 
@@ -368,7 +370,10 @@ export async function scanOutputsDirectory(outputsDir: string): Promise<Artifact
           await scanDir(fullPath, relativePath);
         } else if (entry.isFile()) {
           try {
-            const stat = await fs.stat(fullPath);
+            const stat = await fs.lstat(fullPath);
+            if (stat.isSymbolicLink()) {
+              continue; // Skip symlinks for security
+            }
             artifacts.push({
               filename: entry.name,
               relativePath,
@@ -683,7 +688,7 @@ export async function generateReport(
 
   let notebook: Notebook;
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     notebook = JSON.parse(content) as Notebook;
   } catch (e) {
     throw new Error(`Failed to read notebook: ${(e as Error).message}`);
@@ -691,7 +696,17 @@ export async function generateReport(
 
   const frontmatter = extractFrontmatter(notebook);
   const markers = extractMarkersFromNotebook(notebook);
-  const artifacts = await scanOutputsDirectory(reportDir);
+
+  // FIX-176: Validate reportDir is not a symlink before scanning
+  let artifacts: ArtifactEntry[] = [];
+  try {
+    const stat = fsSync.lstatSync(reportDir);
+    if (!stat.isSymbolicLink() && stat.isDirectory()) {
+      artifacts = await scanOutputsDirectory(reportDir);
+    }
+  } catch {
+    // Directory doesn't exist yet, empty artifacts
+  }
 
   const model = buildReportModel(frontmatter, markers, artifacts);
 
@@ -702,15 +717,15 @@ export async function generateReport(
 
   const markdown = renderReportMarkdown(model);
 
-  await fs.mkdir(reportDir, { recursive: true });
-  await fs.writeFile(reportPath, markdown, "utf-8");
+  ensureDirSync(reportDir, 0o755);
+  await durableAtomicWrite(reportPath, markdown);
 
   return { reportPath, model };
 }
 
 export async function readExistingReport(reportPath: string): Promise<string | null> {
   try {
-    return await fs.readFile(reportPath, "utf-8");
+    return await readFileNoFollow(reportPath);
   } catch {
     return null;
   }
@@ -748,7 +763,7 @@ export async function gatherReportContext(reportTitle: string): Promise<ReportCo
 
   let notebook: Notebook;
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     notebook = JSON.parse(content) as Notebook;
   } catch (e) {
     throw new Error(`Failed to read notebook for context: ${(e as Error).message}`);
@@ -756,7 +771,17 @@ export async function gatherReportContext(reportTitle: string): Promise<ReportCo
 
   const frontmatter = extractFrontmatter(notebook);
   const markers = extractMarkersFromNotebook(notebook);
-  const artifacts = await scanOutputsDirectory(reportDir);
+
+  // FIX-176: Validate reportDir is not a symlink before scanning
+  let artifacts: ArtifactEntry[] = [];
+  try {
+    const stat = fsSync.lstatSync(reportDir);
+    if (!stat.isSymbolicLink() && stat.isDirectory()) {
+      artifacts = await scanOutputsDirectory(reportDir);
+    }
+  } catch {
+    // Directory doesn't exist yet
+  }
 
   // SECURITY: rawOutputs is untrusted notebook output - do not execute as code.
   // Limit size to prevent memory issues with large outputs.

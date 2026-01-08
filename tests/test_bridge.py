@@ -658,6 +658,96 @@ class TestProcessRequest:
         assert "memory" in response["result"]
 
 
+class TestOversizedLineHandling:
+    """Tests for FIX-175/FIX-179: oversized line handling without corruption."""
+
+    def test_read_bounded_line_normal(self):
+        """Normal line within limit should return (bytes, False)."""
+        from gyoshu_bridge import read_bounded_line
+
+        data = b'{"jsonrpc": "2.0", "id": "1", "method": "ping"}\n'
+        stream = io.BytesIO(data)
+        result, was_oversized = read_bounded_line(stream, 1024)
+
+        assert was_oversized is False
+        assert result == data.rstrip(b"\n")
+
+    def test_read_bounded_line_oversized(self):
+        """Oversized line should return truncated bytes with oversized=True."""
+        from gyoshu_bridge import read_bounded_line
+
+        data = b"x" * 200 + b"\n"
+        stream = io.BytesIO(data)
+        result, was_oversized = read_bounded_line(stream, 100)
+
+        assert was_oversized is True
+        assert len(result) == 100
+
+    def test_read_bounded_line_eof(self):
+        """EOF with no data should return (None, False)."""
+        from gyoshu_bridge import read_bounded_line
+
+        stream = io.BytesIO(b"")
+        result, was_oversized = read_bounded_line(stream, 1024)
+
+        assert result is None
+        assert was_oversized is False
+
+    def test_oversized_line_does_not_corrupt_next_request(self):
+        """After oversized line, next valid request should work correctly."""
+        from gyoshu_bridge import read_bounded_line
+
+        oversized = b"x" * 200 + b"\n"
+        valid_line = b'{"valid": "request"}\n'
+        stream = io.BytesIO(oversized + valid_line)
+
+        result1, was_oversized1 = read_bounded_line(stream, 100)
+        assert was_oversized1 is True
+
+        result2, was_oversized2 = read_bounded_line(stream, 100)
+        assert was_oversized2 is False
+        assert result2 == b'{"valid": "request"}'
+
+    def test_error_response_includes_id_null_for_preparse(self, monkeypatch):
+        """Error responses for pre-parse failures should include id: null."""
+        captured = io.StringIO()
+
+        def mock_send_protocol(data):
+            captured.write(json.dumps(data) + "\n")
+
+        import gyoshu_bridge
+
+        monkeypatch.setattr(gyoshu_bridge, "_send_protocol", mock_send_protocol)
+
+        process_request("not valid json{")
+
+        output = captured.getvalue()
+        response = json.loads(output.strip())
+
+        assert "id" in response
+        assert response["id"] is None
+        assert "error" in response
+
+    def test_json_decode_error_returns_null_id(self, monkeypatch):
+        """JSON decode error should return response with id: null."""
+        captured = io.StringIO()
+
+        def mock_send_protocol(data):
+            captured.write(json.dumps(data) + "\n")
+
+        import gyoshu_bridge
+
+        monkeypatch.setattr(gyoshu_bridge, "_send_protocol", mock_send_protocol)
+
+        process_request("{invalid json")
+
+        output = captured.getvalue()
+        response = json.loads(output.strip())
+
+        assert response["id"] is None
+        assert response["error"]["code"] == ERROR_PARSE
+
+
 class TestExecuteIntegration:
     """Integration tests for execute workflow with markers."""
 

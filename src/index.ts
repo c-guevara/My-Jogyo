@@ -4,6 +4,8 @@ import * as path from "path";
 import * as crypto from "crypto";
 import { homedir } from "os";
 import { fileURLToPath } from "url";
+import { readFileNoFollowSync, openNoFollowSync } from "./lib/atomic-write";
+import { ensureDirSync, validatePathSegment } from "./lib/paths";
 
 import manifest from "./gyoshu-manifest.json";
 import { GyoshuPlugin as GyoshuHooks } from "./plugin/gyoshu-hooks";
@@ -56,19 +58,29 @@ function getPackageRoot(): string {
 
 function isValidPath(category: string, file: string): boolean {
   if (!ALLOWED_CATEGORIES.has(category)) return false;
-  if (file.includes("..") || path.isAbsolute(file)) return false;
-  if (file.includes("\0")) return false;
-  if (!SAFE_FILENAME_REGEX.test(file)) return false;
+  if (!file || path.isAbsolute(file)) return false;
+  const segments = file.split(/[/\\]/);
+  if (segments.every(s => !s)) return false;
+  for (const segment of segments) {
+    if (!segment) continue;
+    try {
+      validatePathSegment(segment, "pathSegment");
+    } catch {
+      return false;
+    }
+  }
   const normalized = path.normalize(file);
-  if (normalized.startsWith("..")) return false;
+  if (normalized === "." || normalized.startsWith("..")) return false;
   return true;
 }
 
 function isValidSkillName(name: string): boolean {
-  if (name.includes("..") || name.includes("/") || name.includes("\\")) return false;
-  if (name.includes("\0")) return false;
-  if (!SAFE_DIRNAME_REGEX.test(name)) return false;
-  return true;
+  try {
+    validatePathSegment(name, "skillName");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isSymlink(targetPath: string): boolean {
@@ -91,10 +103,8 @@ function isProcessAlive(pid: number): boolean {
 
 function parseLockFile(): LockInfo | null {
   try {
-    if (isSymlink(INSTALL_LOCK_FILE)) {
-      return null;
-    }
-    const content = fs.readFileSync(INSTALL_LOCK_FILE, "utf-8");
+    // Security: Use O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
+    const content = readFileNoFollowSync(INSTALL_LOCK_FILE);
     const lines = content.trim().split("\n");
     if (lines.length < 3) return null;
     const pid = parseInt(lines[0], 10);
@@ -103,6 +113,7 @@ function parseLockFile(): LockInfo | null {
     if (isNaN(pid) || isNaN(timestamp) || !lockId) return null;
     return { pid, timestamp, lockId };
   } catch {
+    // ENOENT = doesn't exist, ELOOP = symlink rejected, or parse error
     return null;
   }
 }
@@ -136,7 +147,7 @@ function ensureConfigDir(errors: string[]): string | null {
       return null;
     }
 
-    fs.mkdirSync(OPENCODE_CONFIG, { recursive: true });
+    ensureDirSync(OPENCODE_CONFIG);
 
     const postValidation = validateNoSymlinksInPath(OPENCODE_CONFIG);
     if (!postValidation.valid) {
@@ -159,7 +170,7 @@ function ensureStateDir(configRealPath: string, errors: string[]): boolean {
       return false;
     }
 
-    fs.mkdirSync(GYOSHU_STATE_DIR, { recursive: true });
+    ensureDirSync(GYOSHU_STATE_DIR);
 
     if (isSymlink(GYOSHU_STATE_DIR)) {
       errors.push("State directory is a symlink - refusing to use");
@@ -185,7 +196,7 @@ function isPathConfined(targetPath: string, configRealPath: string, errors: stri
       return false;
     }
     const parentDir = path.dirname(targetPath);
-    fs.mkdirSync(parentDir, { recursive: true });
+    ensureDirSync(parentDir);
     const parentReal = fs.realpathSync(parentDir);
     return parentReal.startsWith(configRealPath + path.sep) || parentReal === configRealPath;
   } catch (err) {
@@ -380,19 +391,22 @@ function recoverInterruptedSwaps(configRealPath: string, errors: string[]): void
 
 function loadInstallState(): { state: InstallState | null; error?: string } {
   try {
-    if (fs.existsSync(INSTALL_STATE_FILE)) {
-      if (isSymlink(INSTALL_STATE_FILE)) {
+    // Security: Use O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
+    const content = readFileNoFollowSync(INSTALL_STATE_FILE);
+    const parsed = JSON.parse(content);
+    if (typeof parsed !== "object" || !parsed.version || !Array.isArray(parsed.files)) {
+      return { state: null, error: "Install state file has invalid schema" };
+    }
+    return { state: parsed };
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    // ENOENT = doesn't exist, ELOOP = symlink rejected by O_NOFOLLOW
+    if (code === "ENOENT" || code === "ELOOP") {
+      if (code === "ELOOP") {
         return { state: null, error: "Install state file is a symlink - refusing to read" };
       }
-      const content = fs.readFileSync(INSTALL_STATE_FILE, "utf-8");
-      const parsed = JSON.parse(content);
-      if (typeof parsed !== "object" || !parsed.version || !Array.isArray(parsed.files)) {
-        return { state: null, error: "Install state file has invalid schema" };
-      }
-      return { state: parsed };
+      return { state: null };
     }
-    return { state: null };
-  } catch (err) {
     return {
       state: null,
       error: `Failed to load install state: ${err instanceof Error ? err.message : String(err)}`,
@@ -461,10 +475,23 @@ function atomicCopyFile(srcPath: string, destPath: string, configRealPath: strin
     throw new Error("Confinement check failed before write");
   }
 
+  // Security: Use O_NOFOLLOW to atomically reject symlinks on source (no TOCTOU race)
+  // Reads as Buffer for binary-safe file copying
+  const srcFd = openNoFollowSync(srcPath, fs.constants.O_RDONLY);
+  let content: Buffer;
+  try {
+    const srcStat = fs.fstatSync(srcFd);
+    if (!srcStat.isFile()) {
+      throw new Error(`Security: ${srcPath} is not a regular file`);
+    }
+    content = fs.readFileSync(srcFd);
+  } finally {
+    fs.closeSync(srcFd);
+  }
+
   const tempPath = `${destPath}.tmp.${crypto.randomUUID()}`;
   const fd = fs.openSync(tempPath, "wx", 0o600);
   try {
-    const content = fs.readFileSync(srcPath);
     fs.writeSync(fd, content);
     fs.fsyncSync(fd);
     fs.closeSync(fd);
@@ -498,10 +525,23 @@ function atomicCreateFile(srcPath: string, destPath: string, configRealPath: str
     throw new Error("Confinement check failed before write");
   }
 
+  // Security: Use O_NOFOLLOW to atomically reject symlinks on source (no TOCTOU race)
+  // Reads as Buffer for binary-safe file copying
+  const srcFd = openNoFollowSync(srcPath, fs.constants.O_RDONLY);
+  let content: Buffer;
+  try {
+    const srcStat = fs.fstatSync(srcFd);
+    if (!srcStat.isFile()) {
+      throw new Error(`Security: ${srcPath} is not a regular file`);
+    }
+    content = fs.readFileSync(srcFd);
+  } finally {
+    fs.closeSync(srcFd);
+  }
+
   const tempPath = `${destPath}.tmp.${crypto.randomUUID()}`;
   const fd = fs.openSync(tempPath, "wx", 0o600);
   try {
-    const content = fs.readFileSync(srcPath);
     fs.writeSync(fd, content);
     fs.fsyncSync(fd);
     fs.closeSync(fd);
@@ -572,7 +612,7 @@ function installFile(
   }
 
   try {
-    fs.mkdirSync(path.dirname(destPath), { recursive: true });
+    ensureDirSync(path.dirname(destPath));
     atomicCreateFile(srcPath, destPath, configRealPath);
     return { installed: true, skipped: false, updated: false };
   } catch (err) {

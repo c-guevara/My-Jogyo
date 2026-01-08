@@ -1421,22 +1421,13 @@ Gyoshu uses Python virtual environments for research reproducibility.
 
 | Priority | Type | Detection Method |
 |----------|------|------------------|
-| 1 | Custom | `GYOSHU_PYTHON_PATH` env var |
-| 2 | venv | `.venv/bin/python` exists |
+| 1 | venv | `.venv/bin/python` exists |
 
 ### Quick Setup
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install pandas numpy scikit-learn matplotlib seaborn
-```
-
-### Environment Override
-
-Set `GYOSHU_PYTHON_PATH` to force a specific Python interpreter:
-
-```bash
-export GYOSHU_PYTHON_PATH=/path/to/custom/python
 ```
 
 > **Note:** Gyoshu uses your project's virtual environment. It never modifies system Python.

@@ -6,14 +6,21 @@
 
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
-import { durableAtomicWrite, fileExists, readFile } from "../lib/atomic-write";
-import { getLegacyManifestPath, getNotebookPath } from "../lib/paths";
+import * as path from "path";
+import { durableAtomicWrite, fileExists, readFile, readFileNoFollow } from "../lib/atomic-write";
+import { getSessionDir, getNotebookPath, getLegacyManifestPath, validatePathSegment } from "../lib/paths";
 import { gatherReportContext, ReportContext, generateReport } from "../lib/report-markdown";
 import { exportToPdf, PdfExportResult } from "../lib/pdf-export";
 import { runQualityGates, QualityGateResult } from "../lib/quality-gates";
 import { evaluateGoalGate, recommendPivot, GoalGateResult } from "../lib/goal-gates";
+import { evaluateReportGate, ReportGateResult } from "../lib/report-gates";
 import { extractFrontmatter, GyoshuFrontmatter } from "../lib/notebook-frontmatter";
 import type { Notebook } from "../lib/cell-identity";
+import { getReportLockPath, DEFAULT_LOCK_TIMEOUT_MS } from "../lib/lock-paths";
+import { withLock } from "../lib/session-lock";
+import { isValidBridgeMeta, type BridgeMeta } from "../lib/bridge-meta";
+
+const BRIDGE_META_FILE = "bridge_meta.json";
 
 interface KeyResult {
   name: string;
@@ -62,25 +69,78 @@ interface ValidationWarning {
 }
 
 function getManifestPath(sessionId: string): string {
-  return getLegacyManifestPath(sessionId);
+  return path.join(getSessionDir(sessionId), "session_manifest.json");
+}
+
+function getBridgeMetaPath(sessionId: string): string {
+  return path.join(getSessionDir(sessionId), BRIDGE_META_FILE);
+}
+
+async function readBridgeMeta(sessionId: string): Promise<BridgeMeta | null> {
+  const metaPath = getBridgeMetaPath(sessionId);
+  if (!(await fileExists(metaPath))) {
+    return null;
+  }
+  try {
+    const meta = await readFile<unknown>(metaPath, true);
+    if (!isValidBridgeMeta(meta)) {
+      return null;
+    }
+    return meta;
+  } catch {
+    return null;
+  }
+}
+
+function createMinimalManifestFromBridgeMeta(
+  sessionId: string,
+  bridgeMeta: BridgeMeta
+): SessionManifest {
+  // Accept both startedAt (python-repl.ts) and bridgeStarted (session-manager.ts)
+  const timestamp = bridgeMeta.bridgeStarted || bridgeMeta.startedAt || new Date().toISOString();
+  return {
+    researchSessionID: sessionId,
+    created: timestamp,
+    updated: timestamp,
+    status: "active",
+    notebookPath: bridgeMeta.notebookPath || "",
+    reportTitle: bridgeMeta.reportTitle,
+  };
+}
+
+interface ManifestLoadResult {
+  manifest: SessionManifest;
+  source: "session_manifest" | "bridge_meta" | "legacy_manifest";
+}
+
+async function loadSessionManifest(sessionId: string): Promise<ManifestLoadResult | null> {
+  const manifestPath = getManifestPath(sessionId);
+  if (await fileExists(manifestPath)) {
+    const manifest = await readFile<SessionManifest>(manifestPath, true).catch(() => null);
+    if (manifest) {
+      return { manifest, source: "session_manifest" };
+    }
+  }
+
+  const bridgeMeta = await readBridgeMeta(sessionId);
+  if (bridgeMeta) {
+    const manifest = createMinimalManifestFromBridgeMeta(sessionId, bridgeMeta);
+    return { manifest, source: "bridge_meta" };
+  }
+
+  const legacyPath = getLegacyManifestPath(sessionId);
+  if (await fileExists(legacyPath)) {
+    const manifest = await readFile<SessionManifest>(legacyPath, true).catch(() => null);
+    if (manifest) {
+      return { manifest, source: "legacy_manifest" };
+    }
+  }
+
+  return null;
 }
 
 function validateSessionId(sessionId: string): void {
-  if (!sessionId || typeof sessionId !== "string") {
-    throw new Error("researchSessionID is required and must be a string");
-  }
-
-  if (sessionId.includes("..") || sessionId.includes("/") || sessionId.includes("\\")) {
-    throw new Error("Invalid researchSessionID: contains path traversal characters");
-  }
-
-  if (sessionId.trim().length === 0) {
-    throw new Error("Invalid researchSessionID: cannot be empty or whitespace");
-  }
-
-  if (sessionId.length > 255) {
-    throw new Error("Invalid researchSessionID: exceeds maximum length of 255 characters");
-  }
+  validatePathSegment(sessionId, "researchSessionID");
 }
 
 function validateEvidence(
@@ -313,10 +373,15 @@ export default tool({
 
     validateSessionId(researchSessionID);
 
-    const manifestPath = getManifestPath(researchSessionID);
-    if (!(await fileExists(manifestPath))) {
-      throw new Error(`Session '${researchSessionID}' not found. Cannot signal completion for non-existent session.`);
+    const manifestLoadResult = await loadSessionManifest(researchSessionID);
+    if (!manifestLoadResult) {
+      throw new Error(
+        `Session '${researchSessionID}' not found. ` +
+        `No session_manifest.json, bridge_meta.json, or legacy manifest found. ` +
+        `Ensure the session was created via python-repl before calling completion.`
+      );
     }
+    const { manifest: initialManifest, source: manifestSource } = manifestLoadResult;
 
     const typedEvidence = evidence as CompletionEvidence | undefined;
     const typedBlockers = blockers as string[] | undefined;
@@ -329,6 +394,7 @@ export default tool({
 
     let qualityGateResult: QualityGateResult | undefined;
     let goalGateResult: GoalGateResult | undefined;
+    let reportGateResult: ReportGateResult | undefined;
     let frontmatter: GyoshuFrontmatter | null = null;
     let adjustedStatus = status;
 
@@ -345,7 +411,7 @@ export default tool({
     if (status === "SUCCESS" && reportTitle) {
       try {
         const notebookPath = getNotebookPath(reportTitle);
-        const notebookContent = await fs.readFile(notebookPath, "utf-8");
+        const notebookContent = await readFileNoFollow(notebookPath);
         const notebook = JSON.parse(notebookContent) as Notebook;
 
         const allOutput: string[] = [];
@@ -404,8 +470,68 @@ export default tool({
       }
     }
 
-    const manifest = await readFile<SessionManifest>(manifestPath, true);
+    // =========================================================================
+    // REPORT GENERATION AND REPORT GATE
+    // Must run BEFORE manifest write so adjustedStatus changes are persisted
+    // =========================================================================
+    let aiReportResult: AIReportResult | undefined;
+    let generatedReportPath: string | undefined;
+    let pdfExportResult: PdfExportResult | undefined;
+    
+    // Generate report for both SUCCESS and PARTIAL completions
+    // PARTIAL still produces valuable artifacts that should be documented
+    if (valid && (adjustedStatus === "SUCCESS" || adjustedStatus === "PARTIAL")) {
+      aiReportResult = await tryGatherAIContext(reportTitle);
+      
+      if (reportTitle) {
+        try {
+          // Wrap report generation and PDF export with REPORT_LOCK to prevent
+          // concurrent write corruption when multiple processes try to generate
+          await withLock(
+            getReportLockPath(reportTitle),
+            async () => {
+              const { reportPath } = await generateReport(reportTitle);
+              generatedReportPath = reportPath;
+              
+              // Run Report Gate (RGEP v1) - validate report completeness
+              // This is the third gate in the Three-Gate system:
+              // 1. Trust Gate (quality gates) - statistical rigor
+              // 2. Goal Gate - acceptance criteria met
+              // 3. Report Gate - report is complete and well-formed
+              reportGateResult = evaluateReportGate(reportTitle);
+              
+              if (!reportGateResult.passed && adjustedStatus === "SUCCESS") {
+                adjustedStatus = "PARTIAL";
+                warnings.push({
+                  code: "REPORT_INCOMPLETE",
+                  message: `Report Gate failed: ${reportGateResult.violations.length} violation(s). Score: ${reportGateResult.score}/100`,
+                  severity: "warning",
+                });
+              }
+              
+              // Only export PDF for SUCCESS (fully validated research)
+              if (exportPdf && reportPath && adjustedStatus === "SUCCESS") {
+                pdfExportResult = await exportToPdf(reportPath);
+              }
+            },
+            DEFAULT_LOCK_TIMEOUT_MS
+          );
+        } catch (e) {
+          console.warn(`Report generation failed: ${(e as Error).message}`);
+          // Gate failure must fail-safe: downgrade to PARTIAL, never silently pass
+          if (adjustedStatus === "SUCCESS") {
+            adjustedStatus = "PARTIAL";
+            warnings.push({
+              code: "REPORT_GENERATION_ERROR",
+              message: `Report generation failed: ${(e as Error).message}. Downgrading to PARTIAL.`,
+              severity: "warning",
+            });
+          }
+        }
+      }
+    }
 
+    const manifestPath = getManifestPath(researchSessionID);
     const completionRecord: CompletionRecord = {
       timestamp: new Date().toISOString(),
       status: adjustedStatus,
@@ -425,7 +551,7 @@ export default tool({
     }
 
     const updatedManifest: SessionManifest = {
-      ...manifest,
+      ...initialManifest,
       updated: new Date().toISOString(),
       goalStatus: mapToGoalStatus(adjustedStatus),
       completion: completionRecord,
@@ -437,30 +563,6 @@ export default tool({
 
     if (valid) {
       await durableAtomicWrite(manifestPath, JSON.stringify(updatedManifest, null, 2));
-    }
-
-    let aiReportResult: AIReportResult | undefined;
-    let generatedReportPath: string | undefined;
-    let pdfExportResult: PdfExportResult | undefined;
-    
-    // Generate report for both SUCCESS and PARTIAL completions
-    // PARTIAL still produces valuable artifacts that should be documented
-    if (valid && (adjustedStatus === "SUCCESS" || adjustedStatus === "PARTIAL")) {
-      aiReportResult = await tryGatherAIContext(reportTitle);
-      
-      if (reportTitle) {
-        try {
-          const { reportPath } = await generateReport(reportTitle);
-          generatedReportPath = reportPath;
-          
-          // Only export PDF for SUCCESS (fully validated research)
-          if (exportPdf && reportPath && adjustedStatus === "SUCCESS") {
-            pdfExportResult = await exportToPdf(reportPath);
-          }
-        } catch (e) {
-          console.warn(`Report generation failed: ${(e as Error).message}`);
-        }
-      }
     }
 
     const response: Record<string, unknown> = {
@@ -475,6 +577,7 @@ export default tool({
         : `Completion signal rejected due to validation errors`,
       completion: valid ? completionRecord : undefined,
       manifestUpdated: valid,
+      manifestSource,
       summary: {
         status: adjustedStatus,
         hasEvidence: !!typedEvidence,
@@ -541,6 +644,21 @@ export default tool({
 
       if (!goalGateResult.passed) {
         response.message = `Completion signal recorded: ${adjustedStatus} (Goal Gate failed: ${goalGateResult.metCount}/${goalGateResult.totalCount} criteria met)`;
+      }
+    }
+
+    if (reportGateResult) {
+      response.reportGates = {
+        passed: reportGateResult.passed,
+        overallStatus: reportGateResult.overallStatus,
+        score: reportGateResult.score,
+        violations: reportGateResult.violations,
+        sectionValidation: reportGateResult.sectionValidation,
+        findingCount: reportGateResult.findingCount,
+      };
+
+      if (!reportGateResult.passed) {
+        response.message = `Completion signal recorded: ${adjustedStatus} (Report Gate failed: score ${reportGateResult.score}/100)`;
       }
     }
 

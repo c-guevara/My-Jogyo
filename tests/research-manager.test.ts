@@ -13,10 +13,10 @@ import * as path from "path";
 import * as os from "os";
 
 // Import the research-manager tool
-import researchManager from "./research-manager";
+import researchManager from "../src/tool/research-manager";
 
 // Import path utilities for cache clearing
-import { clearProjectRootCache } from "../lib/paths";
+import { clearProjectRootCache } from "../src/lib/paths";
 
 // =============================================================================
 // TEST SETUP

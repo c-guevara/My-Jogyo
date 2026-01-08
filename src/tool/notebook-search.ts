@@ -18,17 +18,19 @@
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { fileExists } from "../lib/atomic-write";
+import { fileExists, readFileNoFollow } from "../lib/atomic-write";
 import { 
   getResearchDir, 
   getResearchNotebooksDir, 
-  getNotebookRootDir 
+  getNotebookRootDir,
+  validatePathSegment
 } from "../lib/paths";
 import { 
   extractFrontmatter, 
   GyoshuFrontmatter,
   ResearchStatus 
 } from "../lib/notebook-frontmatter";
+import { isPathContainedIn } from "../lib/path-security";
 
 // =============================================================================
 // TYPES AND INTERFACES
@@ -367,7 +369,8 @@ async function searchNotebook(
   const matches: SearchMatch[] = [];
 
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    // Security: readFileNoFollow uses O_NOFOLLOW to atomically reject symlinks
+    const content = await readFileNoFollow(notebookPath);
     const notebook: Notebook = JSON.parse(content);
 
     if (!notebook.cells || !Array.isArray(notebook.cells)) {
@@ -402,12 +405,15 @@ async function searchNotebook(
 
 /**
  * Load a Jupyter notebook from disk.
+ * Security: Uses O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
  */
 async function loadNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    // Security: readFileNoFollow uses O_NOFOLLOW to atomically reject symlinks
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch {
+    // Returns null for ENOENT, ELOOP (symlink), or parse errors
     return null;
   }
 }
@@ -454,9 +460,24 @@ async function findNotebooksInDir(
 }
 
 /**
+ * Security error thrown when symlink-based escape is detected.
+ */
+class NotebookSecurityError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "NotebookSecurityError";
+  }
+}
+
+/**
  * Find all notebooks from detected notebook root and legacy research paths.
  * Primary: getNotebookRootDir() (e.g., notebooks/)
  * Fallback: getResearchDir() (e.g., gyoshu/research/)
+ * 
+ * Security: Rejects symlinked notebook roots and verifies realpath containment
+ * for each discovered notebook to prevent directory escape attacks.
+ * 
+ * @throws {NotebookSecurityError} If notebook root is a symlink
  */
 async function findAllNotebooks(): Promise<DiscoveredNotebook[]> {
   const notebooks: DiscoveredNotebook[] = [];
@@ -465,8 +486,23 @@ async function findAllNotebooks(): Promise<DiscoveredNotebook[]> {
   // Primary: detected notebook root (flat structure)
   const notebookRoot = getNotebookRootDir();
   if (await fileExists(notebookRoot)) {
+    // Security: Reject if notebook root is a symlink
+    const rootStat = await fs.lstat(notebookRoot);
+    if (rootStat.isSymbolicLink()) {
+      throw new NotebookSecurityError("Security: notebook root is a symlink");
+    }
+
+    // Get realpath of root for containment checks
+    const rootRealpath = await fs.realpath(notebookRoot);
+
     const found = await findNotebooksInDir(notebookRoot);
     for (const nb of found) {
+      // Security: Verify realpath containment for each notebook
+      if (!isPathContainedIn(nb.path, rootRealpath, { useRealpath: true })) {
+        console.warn(`Security: Skipping notebook outside root: ${nb.path}`);
+        continue;
+      }
+
       if (!seen.has(nb.path)) {
         notebooks.push(nb);
         seen.add(nb.path);
@@ -477,6 +513,15 @@ async function findAllNotebooks(): Promise<DiscoveredNotebook[]> {
   // Fallback: legacy gyoshu/research paths
   const researchDir = getResearchDir();
   if (await fileExists(researchDir)) {
+    // Security: Reject if research dir is a symlink
+    const researchStat = await fs.lstat(researchDir);
+    if (researchStat.isSymbolicLink()) {
+      throw new NotebookSecurityError("Security: research directory is a symlink");
+    }
+
+    // Get realpath of research dir for containment checks
+    const researchRealpath = await fs.realpath(researchDir);
+
     try {
       const entries = await fs.readdir(researchDir, { withFileTypes: true });
 
@@ -493,6 +538,13 @@ async function findAllNotebooks(): Promise<DiscoveredNotebook[]> {
             for (const nbEntry of nbEntries) {
               if (nbEntry.isFile() && nbEntry.name.endsWith(".ipynb")) {
                 const nbPath = path.join(notebooksDir, nbEntry.name);
+                
+                // Security: Verify realpath containment for each notebook
+                if (!isPathContainedIn(nbPath, researchRealpath, { useRealpath: true })) {
+                  console.warn(`Security: Skipping notebook outside research dir: ${nbPath}`);
+                  continue;
+                }
+
                 if (!seen.has(nbPath)) {
                   const runId = nbEntry.name.slice(0, -6);
                   notebooks.push({
@@ -699,10 +751,12 @@ export default tool({
     const hasFilters = !!(tags?.length || status);
 
     if (researchId) {
-      if (researchId.includes("..") || researchId.includes("/") || researchId.includes("\\")) {
+      try {
+        validatePathSegment(researchId, "researchId");
+      } catch (err) {
         return JSON.stringify({
           success: false,
-          error: "Invalid researchId: contains path traversal characters",
+          error: err instanceof Error ? err.message : "Invalid researchId",
         });
       }
 
@@ -728,7 +782,18 @@ export default tool({
         allMatches.push(...matches);
       }
     } else {
-      let notebooks = await findAllNotebooks();
+      let notebooks: DiscoveredNotebook[];
+      try {
+        notebooks = await findAllNotebooks();
+      } catch (error) {
+        if (error instanceof NotebookSecurityError) {
+          return JSON.stringify({
+            success: false,
+            error: error.message,
+          });
+        }
+        throw error;
+      }
 
       if (hasFilters) {
         notebooks = await filterByFrontmatter(notebooks, {

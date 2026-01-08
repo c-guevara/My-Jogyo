@@ -13,7 +13,7 @@ import {
   durableAtomicWrite,
   fileExists,
   readFile,
-} from '../.opencode/lib/atomic-write';
+} from '../src/lib/atomic-write';
 
 // Test directory for all atomic write tests
 let testDir: string;

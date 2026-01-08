@@ -1371,3 +1371,567 @@ Ran all verification checks:
   - Status: Pre-existing issue, not blocking independence
 
 Time taken: ~15 minutes
+
+[2026-01-06 14:30] - Implement Rich Plotting Protocol (RPP v1) in Jogyo agent
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- Existing `[PLOT]` marker was very basic - just a simple marker without metadata
+- jogyo.md had well-organized structure making it easy to add new section
+
+### IMPLEMENTATION DECISIONS
+- Added comprehensive "## Rich Plotting Protocol (RPP v1)" section (~420 lines) to jogyo.md
+- Positioned section after ML Pipeline Quality Checklist (line 588) since plotting is closely related to ML analysis
+- Replaced legacy `[PLOT]` with new `[FIGURE:type:path=...:dpi=...:lib=...]` marker format
+- Updated Artifacts section (line 64-67) to reference new FIGURE marker as preferred, kept PLOT as legacy
+- Created `save_figure()` helper function template with proper metadata marker emission
+- Documented minimum figure requirements per goal type (EDA: 5, ML Classification: 5, ML Regression: 5, Statistical: 3, Time Series: 4, Clustering: 4)
+- Added detailed checklists for each goal type
+- Created plot type recommendations table (14 data situations mapped to recommended plots)
+- Added seaborn styling best practices with `setup_plotting_style()` function
+- Included 7 code templates: distributions, correlation heatmap, confusion matrix, ROC curve, feature importance, learning curve, residual analysis
+- Added Figure Quality Checklist (10-item checklist for publication-quality figures)
+
+### PROBLEMS FOR NEXT TASKS
+- Report generation code (`src/lib/report-markdown.ts`) may need updates to parse new FIGURE markers
+- Baksa reviewer may need updates to enforce minimum figure requirements as part of quality gates
+- Consider adding FIGURE marker parsing to marker-parser.ts in future
+
+### VERIFICATION RESULTS
+- Modified: src/agent/jogyo.md
+  - Line 64-67: Updated Artifacts section to reference FIGURE marker
+  - Lines 588-1009: Added complete Rich Plotting Protocol section (~420 lines)
+- Verified section structure:
+  - FIGURE Marker Format with component table
+  - Valid Figure Types table (6 categories)
+  - save_figure() helper function template
+  - Minimum Figure Requirements table (6 goal types)
+  - Goal-specific figure checklists (4 checklists)
+  - Plot Type Recommendations table (14 recommendations)
+  - Seaborn Styling Best Practices with setup_plotting_style()
+  - Code Templates (7 complete templates)
+  - Figure Quality Checklist (10 items)
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Structured marker format with key=value pairs
+  - Evidence: jogyo.md:598-609 (`[FIGURE:type:path=...:dpi=...:lib=...]`)
+  - Use case: Captures rich metadata for report generation and artifact tracking
+- [PROMOTE:CONV] Convention: Goal-type-specific checklists for quality enforcement
+  - Evidence: jogyo.md:685-709 (separate checklists for EDA, ML Classification, ML Regression, Statistical)
+  - Ensures minimum visualization requirements are met per research type
+- [PROMOTE:PAT] Pattern: Helper function that emits structured markers
+  - Evidence: jogyo.md:627-669 (save_figure function emits [FIGURE:...] marker)
+  - Ensures consistent marker format and proper file saving
+- [PROMOTE:CONV] Convention: Publication-quality defaults (300 DPI, bbox_inches='tight', white background)
+  - Evidence: jogyo.md:656-659, jogyo.md:750-764
+  - Standard settings for publication-ready figures
+
+Time taken: ~15 minutes
+
+[2026-01-06 21:30] - Implement Report Gate (RGEP v1) in src/lib/report-gates.ts
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- Existing gate patterns in quality-gates.ts and goal-gates.ts were well-structured
+- Report files are stored as README.md in reports/{reportTitle}/ (not report.md as some might expect)
+
+### IMPLEMENTATION DECISIONS
+- Created src/lib/report-gates.ts (~520 lines) following existing gate patterns
+- Defined ReportViolationType with 7 violation types:
+  - REPORT_DIR_MISSING (-100 penalty, blocks completion)
+  - REPORT_FILE_MISSING (-100 penalty, blocks completion)
+  - SECTION_MISSING_EXEC_SUMMARY (-20 penalty)
+  - SECTION_MISSING_KEY_FINDINGS (-20 penalty)
+  - SECTION_MISSING_CONCLUSION (-20 penalty)
+  - NO_FINDINGS (-30 penalty)
+  - ARTIFACT_MISSING (-10 penalty per missing artifact)
+- Created ReportGateResult interface with:
+  - passed: boolean
+  - overallStatus: "COMPLETE" | "INCOMPLETE" | "MISSING"
+  - violations: ReportViolation[]
+  - score: 0-100 (100 - sum of penalties)
+  - sectionValidation, findingCount, artifactCount, missingArtifacts
+- Implemented helper functions: validateSections, countFindings, extractArtifactRefs, validateArtifacts
+- Added isReportReady() quick-check function for fast validation
+- Section matching is case-insensitive and supports variants (e.g., "## Summary" matches Executive Summary)
+- Artifact reference extraction supports: ![alt](path), [text](path.ext), `path/file.ext`
+
+### PROBLEMS FOR NEXT TASKS
+- Task 2 (gyoshu-completion.ts wiring) should use evaluateReportGate() before marking SUCCESS
+- Report markdown generator should be updated to include required sections automatically
+- Consider adding FIGURE marker extraction for artifact validation in future
+
+### VERIFICATION RESULTS
+- Ran: bun test tests/report-gates.test.ts (44 pass, 0 fail, 74 expect() calls)
+- Created: src/lib/report-gates.ts (~520 lines)
+- Created: tests/report-gates.test.ts (~480 lines)
+- TypeScript compilation: No errors
+- Module exports verified: evaluateReportGate, isReportReady, ReportGateResult, ReportViolation
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Gate modules follow consistent structure with ViolationType, Violation, GateResult interfaces
+  - Evidence: quality-gates.ts:27-88, goal-gates.ts:27-62, report-gates.ts:33-100
+  - Use case: Consistent API across all gate implementations
+- [PROMOTE:CONV] Convention: Section separators use // ===== format with ALL CAPS section name
+  - Evidence: quality-gates.ts, goal-gates.ts, report-gates.ts (lines 29-31, 102-104, 139-141, 322-324)
+- [PROMOTE:PAT] Pattern: Penalty-based scoring where score = max(0, 100 - sum of penalties)
+  - Evidence: quality-gates.ts:357-358, report-gates.ts:463-465
+  - Use case: Provides quantifiable quality metrics
+- [PROMOTE:CONV] Convention: Report files are README.md in reports/{reportTitle}/ directory
+  - Evidence: paths.ts:getReportReadmePath(), report-markdown.ts:generateReport()
+  - Not report.md as might be assumed
+
+Time taken: ~20 minutes
+
+[2026-01-06 22:30] - Task 2.1: Define lock path helpers + lock ordering
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- shortenSessionId() only hashes strings longer than 12 characters (returns unchanged otherwise)
+- Pre-existing test failures in integration.test.ts and checkpoint-resume.test.ts unrelated to this task
+
+### IMPLEMENTATION DECISIONS
+- Created NEW file `src/lib/lock-paths.ts` rather than extending paths.ts (better separation of concerns)
+- Lock path structure: `${getRuntimeDir()}/locks/{type}/{shortId}.lock`
+  - type: "notebook", "report", or "queue"
+  - shortId: 12-char hash via shortenSessionId() with prefix (e.g., "nb:title")
+- Added prefix to createLockId() to ensure uniqueness across lock types
+  - "nb:" for notebook locks
+  - "rpt:" for report locks
+  - "q:" for queue locks
+- Exported LOCK_ORDER const with numeric ordering (1=QUEUE, 2=NOTEBOOK, 3=REPORT)
+- Exported DEFAULT_LOCK_TIMEOUT_MS = 30000 for fail-fast behavior
+- Used module-level JSDoc to document lock ordering rules (task requirement)
+
+### PROBLEMS FOR NEXT TASKS
+- Task 2.2 (wrap notebook writes) should import getNotebookLockPath() and use withLock()
+- Task 2.3 (wrap checkpoint writes) should use getNotebookLockPath()
+- Task 2.4 (wrap report generation) should use getReportLockPath()
+- Important: withLock() from session-lock.ts should be used, NOT manual acquire/release
+
+### VERIFICATION RESULTS
+- Ran: `bun test tests/lock-paths.test.ts` (30 pass, 0 fail, 36 expect() calls)
+- Created: src/lib/lock-paths.ts (~185 lines)
+- Created: tests/lock-paths.test.ts (~230 lines)
+- All tests verify:
+  - Path format is correct (.lock extension, correct subdirectory)
+  - Paths are within runtime directory (not project directory)
+  - Short IDs (12 chars) are used for long report titles
+  - Different lock types produce unique paths for same identifier
+  - Lock ordering constants are correct
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Lock path helpers use prefix in hash to ensure uniqueness across lock types
+  - Evidence: lock-paths.ts:createLockId() combines "nb:", "rpt:", "q:" with identifier
+  - Use case: Same reportTitle produces different lock paths for different lock types
+- [PROMOTE:CONV] Convention: Lock files go in OS temp directory, not project root
+  - Evidence: lock-paths.ts:getLocksDir() returns path under getRuntimeDir()
+  - Avoids cluttering project with ephemeral lock files
+- [PROMOTE:CONV] Convention: Lock ordering documented in module JSDoc as numbered list
+  - Evidence: lock-paths.ts:1-38 (module docstring with Lock Ordering section)
+  - Critical for deadlock prevention - developers need to see ordering immediately
+- [PROMOTE:CMD] Command verified: `bun test tests/lock-paths.test.ts`
+  - Context: Run from project root to test specific file
+  - Output: 30 pass, 0 fail
+
+Time taken: ~15 minutes
+
+[2026-01-06 15:20] - Task 2.4: Wrap report generation with REPORT_LOCK
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- Pre-existing test failures in session-lock.test.ts due to module path resolution (.opencode/ vs src/)
+- gyoshu-completion.ts had well-structured code making the lock integration straightforward
+
+### IMPLEMENTATION DECISIONS
+- Added imports at top of gyoshu-completion.ts (lines 18-19):
+  - `getReportLockPath` and `DEFAULT_LOCK_TIMEOUT_MS` from `../lib/lock-paths`
+  - `withLock` from `../lib/session-lock`
+- Wrapped the entire report generation block (lines 459-487) with `withLock()`:
+  - Lock path: `getReportLockPath(reportTitle)` - hashed path in OS temp directory
+  - Timeout: `DEFAULT_LOCK_TIMEOUT_MS` (30 seconds) for fail-fast behavior
+- Included inside the lock:
+  - `generateReport(reportTitle)` - writes report.md
+  - `evaluateReportGate(reportTitle)` - reads report (kept inside for logical flow)
+  - `exportToPdf(reportPath)` - writes PDF file
+- Error handling preserved: lock failures caught by existing try/catch
+
+### PROBLEMS FOR NEXT TASKS
+- Task 2.2 (notebook writes) and Task 2.3 (checkpoint writes) should follow same pattern
+- Task 2.5 (tests) should add tests for REPORT_LOCK timeout behavior
+- Pre-existing module resolution issues in tests/ need fixing (test files reference `.opencode/` but code is in `src/`)
+
+### VERIFICATION RESULTS
+- Ran: `bun --eval "import tool from './src/tool/gyoshu-completion.ts'"` - Module loads successfully
+- Ran: `bun test tests/lock-paths.test.ts` - 30 pass, 0 fail
+- Ran: `bun test tests/report-gates.test.ts` - 44 pass, 0 fail
+- No gyoshu-completion.test.ts exists (no direct unit tests for this tool)
+- Module compiles and exports correctly with new imports
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: withLock() wrapper for file write protection
+  - Evidence: gyoshu-completion.ts:459-487 wraps generateReport + exportToPdf
+  - Use case: Prevents concurrent write corruption when parallel processes generate reports
+- [PROMOTE:CONV] Convention: Keep related operations inside single lock acquisition
+   - Evidence: Both generateReport() and exportToPdf() inside same withLock() block
+   - Avoids race conditions between report generation and PDF export
+
+Time taken: ~10 minutes
+
+[2026-01-06 23:00] - Task 2.3: Wrap checkpoint writes with NOTEBOOK_LOCK
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the checkpoint-manager.ts
+- Pre-existing test failures in checkpoint-manager.test.ts due to incorrect import path (tests/checkpoint-manager vs ../src/tool/checkpoint-manager) - NOT related to this task
+- Pre-existing TypeScript configuration issues with zod and moduleResolution settings
+
+### IMPLEMENTATION DECISIONS
+- Imported `getNotebookLockPath` and `DEFAULT_LOCK_TIMEOUT_MS` from `../lib/lock-paths`
+- Imported `withLock` from `../lib/session-lock`
+- Wrapped both `save` action notebook writes (lines 732-761) with `withLock()`:
+  - Cell append (`appendCheckpointCell`) and manifest write (`durableAtomicWrite`) are done atomically under lock
+  - cellId is returned from the lock callback to be used in the response
+- Wrapped `emergency` action notebook writes (lines 1321-1358) with `withLock()`:
+  - Includes try/catch for optional cell append (emergency saves can proceed without cell)
+  - Manifest write always happens within the lock
+- Lock timeout set to DEFAULT_LOCK_TIMEOUT_MS (30 seconds) for fail-fast behavior
+- Both the cell append AND manifest write are under the same lock since they're related notebook state
+
+### PROBLEMS FOR NEXT TASKS
+- Task 2.2 (notebook-writer.ts wrapping) should use the same pattern
+- Task 2.5 (tests) should verify concurrent checkpoint operations serialize correctly
+- checkpoint-manager.test.ts has import path issues that need fixing separately
+
+### VERIFICATION RESULTS
+- Ran: `bun test tests/checkpoint-resume.test.ts` (9 pass, 0 fail)
+- Ran: `bun test tests/checkpoint-schema.test.ts` (21 pass, 0 fail)
+- Ran: `bun test tests/lock-paths.test.ts` (30 pass, 0 fail)
+- Module import verification: `bun -e "import checkpointManager from './src/tool/checkpoint-manager'"` - PASS
+- All lock-related imports work correctly at runtime
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Lock callback returns value needed outside the lock scope
+  - Evidence: checkpoint-manager.ts:734-761 (`const cellId = await withLock(..., async () => { return id; })`)
+  - Use case: Capture values from inside locked critical section for use in response
+- [PROMOTE:CONV] Convention: Related operations (cell append + manifest write) go under single lock
+  - Evidence: checkpoint-manager.ts save action wraps both operations together
+  - Reason: Cell ID is needed for manifest, and both modify notebook state
+- [PROMOTE:GOTCHA] Problem: Emergency checkpoints have optional cell append
+  - Symptoms: Cell append failure shouldn't block manifest write
+  - Solution: Keep try/catch for cell append INSIDE the lock, manifest write always executes
+
+Time taken: ~15 minutes
+
+[2026-01-06 15:25] - Task 2.2: Wrap notebook writes with NOTEBOOK_LOCK
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in notebook-writer.ts or python-repl.ts
+- Pre-existing test failures in auto-capture.test.ts due to module path resolution (.opencode/ vs src/) - NOT related to this task
+- Both files had their own independent `saveNotebookWithCellIds()` functions with nearly identical logic
+
+### IMPLEMENTATION DECISIONS
+- notebook-writer.ts:
+  - Added imports: `getNotebookLockPath`, `DEFAULT_LOCK_TIMEOUT_MS` from lock-paths, `withLock` from session-lock
+  - Added `deriveLockIdFromPath()` helper to extract lock identifier from notebook path (basename without .ipynb)
+  - Modified `saveNotebookWithCellIds()` to accept optional `lockIdentifier` parameter
+  - Wrapped `durableAtomicWrite()` call with `withLock()` inside the function
+  - Lock is acquired ONLY around the actual write, not the entire operation (per lock ordering rules)
+  - Updated all 5 call sites to pass `lockIdentifier` (derived from reportTitle or path)
+
+- python-repl.ts:
+  - Added same imports as notebook-writer.ts
+  - Added identical `deriveLockIdFromPath()` helper function
+  - Modified `saveNotebookWithCellIds()` with same locking pattern
+  - Updated `appendCodeCellToNotebook()` to derive and pass lockIdentifier from notebookPath
+
+### PROBLEMS FOR NEXT TASKS
+- Task 2.5 (tests) should verify concurrent notebook writes serialize correctly
+- Consider refactoring common `deriveLockIdFromPath()` to lock-paths.ts to avoid duplication
+- auto-capture.test.ts has import path issues (.opencode/ vs src/) that need separate fix
+
+### VERIFICATION RESULTS
+- Ran: `bun test tests/lock-paths.test.ts` - 30 pass, 0 fail
+- Ran: `pytest -v --tb=short` - 67 pass, all Python tests pass
+- Manual test: notebook-writer ensure_notebook + append_cell with locks - PASS
+- Manual test: appendCodeCellToNotebook with locks - PASS
+- Module import verification for both files - PASS
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Lock only around actual file write, not entire function
+  - Evidence: notebook-writer.ts:145-150 (in-memory operations before lock, write inside lock)
+  - Use case: Follows lock ordering rule "NEVER hold locks during long-running operations"
+- [PROMOTE:CONV] Convention: Derive lock ID from path basename when explicit ID not available
+  - Evidence: deriveLockIdFromPath() extracts basename without .ipynb extension
+  - Provides consistent locking for both new-style (reportTitle) and legacy (path) modes
+- [PROMOTE:PAT] Pattern: Optional lockIdentifier parameter with fallback derivation
+  - Evidence: saveNotebookWithCellIds() accepts optional lockIdentifier, derives from path if not provided
+  - Maintains backwards compatibility while enabling explicit lock control
+
+Time taken: ~15 minutes
+
+[2026-01-06 15:26] - Task 3.2: Define parallel queue state schema
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- Pre-existing test failures in tests/ due to module path resolution (.opencode/ vs src/) - NOT related to this task
+- Existing patterns in auto-loop-state.ts and checkpoint-schema.ts provided clear conventions to follow
+
+### IMPLEMENTATION DECISIONS
+- Created NEW file `src/lib/parallel-queue.ts` (~680 lines) following existing schema patterns
+- Defined type aliases for JobStatus, JobKind, QueueStatus with comprehensive JSDoc
+- Created interfaces: JobPayload, Job, Worker, QueueConfig, ParallelQueueState
+- Added DEFAULT_QUEUE_CONFIG constant with sensible defaults:
+  - staleClaimMs: 300000 (5 minutes) - time before claiming worker is considered dead
+  - maxJobAttempts: 3 - retry twice before permanent failure
+  - heartbeatIntervalMs: 30000 (30 seconds) - how often workers should heartbeat
+- Created factory functions:
+  - `createEmptyQueue(reportTitle, runId, config?)` - create new queue state
+  - `createJob(jobId, stageId, kind, payload?, maxAttempts?)` - create new job
+- Created helper functions:
+  - `isJobStale(job, config)` - check if CLAIMED job has timed out
+  - `getJobsByStatus(state, status)` - filter jobs by status
+  - `getActiveWorkers(state, config?)` - filter workers with recent heartbeats
+  - `getStaleJobs(state)` - find reclaimable jobs
+  - `countJobsByStatus(state)` - get status counts for monitoring
+- Created type guards: isJobStatus, isJobKind, isQueueStatus, isJob, isParallelQueueState
+- Added path helper: `getQueueStatePath(reportTitle, runId)` returning `reports/{reportTitle}/queue/{runId}.json`
+
+### PROBLEMS FOR NEXT TASKS
+- Task 3.1 (parallel-manager.ts) should import these types and use the helper functions
+- Task 3.6 (tests) should test the schema validation and helper functions
+- Queue state will be stored at `reports/{reportTitle}/queue/{runId}.json` - parallel-manager should create this directory
+
+### VERIFICATION RESULTS
+- Ran: `bun -e "import * as pq from './src/lib/parallel-queue'"` - All 14 exports work correctly
+- Ran: `bun -e "const q = pq.createEmptyQueue('test', 'run-001'); console.log(JSON.stringify(q, null, 2))"` - Factory function works
+- Ran: `bun -e "const job = pq.createJob('j1', 'S01', 'jogyo_stage', {objective: 'Test'})"` - Job creation works
+- Ran: `bun -e "pq.isJobStale(staleJob, config)"` - Stale detection works (returns true for 10min old claim)
+- Ran: `bun test` - Pre-existing failures only (not related to this task)
+- TypeScript compiles without errors
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Schema files follow consistent structure - types → interfaces → constants → path helpers → factory functions → helpers → type guards
+  - Evidence: auto-loop-state.ts, checkpoint-schema.ts, parallel-queue.ts all follow this pattern
+  - Use case: Predictable file organization makes it easy to find definitions
+- [PROMOTE:CONV] Convention: Factory functions return full object with all required fields and merged config
+  - Evidence: parallel-queue.ts:createEmptyQueue() merges DEFAULT_QUEUE_CONFIG with user overrides
+  - Ensures consistent state initialization
+- [PROMOTE:PAT] Pattern: Stale detection uses heartbeat timestamp with fallback to claim timestamp
+  - Evidence: parallel-queue.ts:isJobStale() checks heartbeatAt || claimedAt
+  - Use case: Works for jobs that haven't sent first heartbeat yet
+- [PROMOTE:CONV] Convention: Time-based thresholds use milliseconds with descriptive constant names
+  - Evidence: DEFAULT_QUEUE_CONFIG.staleClaimMs = 300000 (5 minutes)
+  - Self-documenting: names indicate unit (Ms) and purpose (staleClaim)
+
+Time taken: ~10 minutes
+
+[2026-01-06 15:28] - Task 3.1: Implement parallel-manager tool (durable queue)
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- Pre-existing test failures in tests/ due to module path resolution (.opencode/ vs src/) - NOT related to this task
+- Existing tool patterns in session-manager.ts, gyoshu-completion.ts provided clear conventions to follow
+
+### IMPLEMENTATION DECISIONS
+- Created `src/tool/parallel-manager.ts` (~988 lines) following existing tool patterns
+- Implemented all 9 required actions:
+  1. **init** - Create new queue with optional config
+  2. **enqueue** - Add jobs to queue with PENDING status
+  3. **claim** - Atomic job claim with worker registration
+  4. **heartbeat** - Keep-alive signal for workers and jobs
+  5. **complete** - Mark job as DONE with result storage
+  6. **fail** - Mark job as FAILED or reset to PENDING for retry based on maxAttempts
+  7. **status** - Get queue stats including job counts and worker info
+  8. **reap** - Reclaim stale CLAIMED jobs that haven't heartbeated
+  9. **barrier_wait** - Check if all jobs (or stage) are complete
+- All mutations protected by QUEUE_LOCK via `withLock(getQueueLockPath(reportTitle, runId), ...)`
+- Used `durableAtomicWrite()` for persistence
+- Queue storage path: `reports/{reportTitle}/queue/{runId}.json`
+- Job state machine: PENDING → CLAIMED → DONE/FAILED
+- Retry logic: fail() resets to PENDING if attempts < maxAttempts
+- Worker capability matching for job claiming
+- Timestamps for heartbeat tracking and stale detection
+
+### PROBLEMS FOR NEXT TASKS
+- Task 3.6 (tests) should test concurrent claim operations
+- Task 3.3 (gyoshu.md update) should document how to use parallel-manager for parallel execution
+- Consider exporting types to src/lib/parallel-queue.ts for reuse (if not already there)
+
+### VERIFICATION RESULTS
+- Ran: `bun -e "const m = require('./src/tool/parallel-manager.ts'); console.log('Tool name:', m.default.name);"` - Tool name: parallel_manager
+- Ran: Full workflow test (init → enqueue → claim → heartbeat → complete → fail → barrier_wait → reap) - ALL PASS
+- Ran: Validation tests (missing reportTitle, empty jobs, missing workerId, etc.) - ALL PASS
+- Module loads and executes correctly without errors
+- All 9 actions verified working through integration test
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: All queue mutations use withLock() for atomic read-modify-write
+  - Evidence: parallel-manager.ts:278-300 (init), 313-353 (enqueue), 367-441 (claim)
+  - Use case: Prevents race conditions in concurrent job claiming
+- [PROMOTE:CONV] Convention: Tool actions return success flag with action name for easy parsing
+  - Evidence: All actions return `{ success: true/false, action: "action_name", ... }`
+  - Consistent response format across all actions
+- [PROMOTE:PAT] Pattern: claim() returns success=false with reason="no_jobs" instead of throwing
+  - Evidence: parallel-manager.ts:399-409
+  - Use case: Workers can poll for jobs without error handling for empty queue
+- [PROMOTE:CONV] Convention: Job state machine enforces transitions via status checks before updates
+  - Evidence: complete() and fail() verify job.status === "CLAIMED" before proceeding
+  - Prevents invalid state transitions
+- [PROMOTE:PAT] Pattern: Retry logic uses attempts counter vs maxAttempts config
+  - Evidence: parallel-manager.ts:591-637 (fail action)
+  - Job resets to PENDING for retry if attempts < maxAttempts, else permanent FAILED
+
+Time taken: ~25 minutes
+
+[2026-01-06 16:00] - Task 4.1: Add Baksa sharding protocol
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- baksa.md was well-structured with clear section organization
+- Existing trust score thresholds (≥80=VERIFIED, 60-79=PARTIAL, <60=REJECTED) match existing conventions in the file
+
+### IMPLEMENTATION DECISIONS
+- Added "## Sharded Verification Protocol" section at end of baksa.md (~228 lines)
+- Created 6 subsections as specified in directive:
+  1. **Sharded Verification Job** - Documents worker inputs (candidatePath, stageId, jobId)
+  2. **Machine-Parsable Output Format** - Exact markers: `Trust Score: {N}` and `Status: {STATUS}`
+  3. **JSON Summary Block** - Single-line JSON with trustScore, status, challenges, findings counts
+  4. **Sharded Verification Workflow** - 7-step ASCII diagram with detailed explanations
+  5. **baksa.json Output Contract** - TypeScript interface with all required fields
+  6. **Sharded vs Non-Sharded Mode** - Explains how Baksa detects which mode to use
+- Used consistent markdown formatting matching existing baksa.md style (tables, code blocks, etc.)
+- Reused existing trust score thresholds from earlier in the document (lines 378-384)
+- Added example invocation context showing how parallel-manager would call Baksa
+
+### PROBLEMS FOR NEXT TASKS
+- Task 4.2 (Add verification jobs to parallel queue) should use the baksa.json schema documented here
+- Task 4.3 (Trust aggregation) should parse the JSON summary block format
+- Task 4.5 (Barrier/commit flow) should wait for baksa.json files alongside candidate.json
+- Tip: The `BaksaResult` interface should be added to `src/lib/parallel-queue.ts` for type safety
+
+### VERIFICATION RESULTS
+- File modified: src/agent/baksa.md (576 → 804 lines, +228 lines)
+- YAML frontmatter intact and valid
+- All 6 required subsections present:
+  - Sharded Verification Job ✓
+  - Machine-Parsable Output Format ✓
+  - JSON Summary Block ✓
+  - Sharded Verification Workflow ✓
+  - baksa.json Output Contract ✓
+  - Sharded vs Non-Sharded Mode ✓
+- No code tests applicable (documentation-only task)
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Machine-parsable markers at end of agent output for automation
+  - Evidence: baksa.md:608-611 (`Trust Score: 85` and `Status: VERIFIED` markers)
+  - Use case: Enables programmatic extraction of verification results from agent output
+- [PROMOTE:CONV] Convention: Agent sharded mode detected by presence of JOB_ID and CANDIDATE_PATH
+  - Evidence: baksa.md:798
+  - Allows same agent to work in both interactive and parallel worker modes
+- [PROMOTE:PAT] Pattern: Output contracts use TypeScript interfaces with JSDoc comments
+  - Evidence: baksa.md:731-759 (BaksaResult interface)
+  - Use case: Self-documenting schema that can be copy-pasted into implementation code
+
+Time taken: ~10 minutes
+
+[2026-01-06 15:45] - Task 4.3: Trust aggregation algorithm
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- auto-decision.ts was well-structured with clear section organization (TYPES, HELPER FUNCTIONS, MAIN DECISION)
+- All 56 existing tests pass without modification
+
+### IMPLEMENTATION DECISIONS
+- Added two new interfaces to the TYPES section:
+  1. `VerificationResult` - Captures output from a single Baksa verification (jobId, candidatePath, trustScore, status, findingsVerified, findingsRejected)
+  2. `AggregatedTrust` - Result of aggregating multiple verifications (aggregatedScore, passed, verificationCount, results, consensus)
+- Added two new functions to the HELPER FUNCTIONS section:
+  1. `aggregateTrustScores(verificationResults[])` - Conservative aggregation using Math.min()
+  2. `selectBestCandidate(candidates[])` - Selection by trust threshold → goal progress → primary metric
+- Conservative aggregation strategy: `aggregatedScore = Math.min(...scores)` ensures high confidence
+- Consensus calculation: "unanimous" if all VERIFIED, "majority" if >50% VERIFIED, "split" otherwise
+- Trust Gate passes when `aggregatedScore >= TRUST_THRESHOLD` (80)
+- Followed existing JSDoc patterns from the file (all exported interfaces and functions have docs)
+
+### PROBLEMS FOR NEXT TASKS
+- Task 4.4 (gyoshu.md commit policy) should reference selectBestCandidate() for candidate selection
+- Task 4.6 (tests) should add unit tests for aggregateTrustScores() and selectBestCandidate()
+- Tip: selectBestCandidate() returns null with reason when no candidates meet threshold
+
+### VERIFICATION RESULTS
+- Ran: `bun -e "import * as ad from './src/lib/auto-decision'"` - All exports work correctly
+- Ran: `bun test tests/auto-loop-decision.test.ts` - 56 pass, 0 fail
+- Ran: 6 functional tests for new functions - All PASS:
+  - Empty array returns aggregatedScore=0, passed=false
+  - Single verification works correctly
+  - Conservative min aggregation works (85, 72 → 72)
+  - No candidates passing threshold returns null
+  - Selection prioritizes goal progress
+  - Tiebreaker uses primary metric
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Conservative aggregation uses Math.min() for trust scores
+  - Evidence: auto-decision.ts:aggregateTrustScores() uses `Math.min(...scores)`
+  - Use case: When multiple verifiers disagree, trust the most skeptical one
+- [PROMOTE:PAT] Pattern: Multi-criteria selection with ordered priority (threshold → primary → secondary)
+  - Evidence: auto-decision.ts:selectBestCandidate() filters by threshold first, then sorts by goalProgress then primaryMetric
+  - Use case: Clean separation of hard requirements (threshold) from optimization (goal progress, metric)
+- [PROMOTE:CONV] Convention: Return null with reason string instead of throwing for selection failures
+  - Evidence: auto-decision.ts:selectBestCandidate() returns `{ selected: null, reason: "..." }`
+  - Use case: Caller can display reason to user without try/catch
+
+Time taken: ~15 minutes
+
+[2026-01-06 16:45] - Task 4.6: Tests: select-best + commit ordering
+
+### DISCOVERED ISSUES
+- No pre-existing issues discovered in the codebase
+- Task 4.3 had already implemented aggregateTrustScores and selectBestCandidate functions
+- Existing test file had clear patterns to follow (mockHelpers, describe groups, expect assertions)
+
+### IMPLEMENTATION DECISIONS
+- Added 37 new tests to tests/auto-loop-decision.test.ts organized into 2 describe blocks:
+  1. **aggregateTrustScores** (18 tests):
+     - empty input: 3 tests (score 0, passed false, unanimous consensus)
+     - single verification: 4 tests (exact score, passed boundary, consensus)
+     - conservative aggregation: 3 tests (minimum score, threshold checks)
+     - consensus calculation: 5 tests (unanimous all, unanimous none, majority, split exact, split less)
+     - edge cases: 3 tests (boundary 80, zero score, max score)
+  2. **selectBestCandidate** (19 tests):
+     - no candidates: 2 tests (null result, descriptive reason)
+     - rejection when none meet threshold: 3 tests (null, reason with score, boundary 79)
+     - single qualified candidate: 3 tests (selects correctly, reason, boundary 80)
+     - goal progress preference: 3 tests (equal trust, different trust, includes reason)
+     - metric tiebreaker: 3 tests (two-way tie, includes reason, three-way tie)
+     - selection reason: 2 tests (defined, includes worker ID)
+     - complex scenarios: 3 tests (mixed qualified/unqualified, preserves data, no mutation)
+- Used existing test patterns from the file (type imports, describe/test structure)
+- Section separators follow existing convention in file (lines 40-42, 104-106, 692-694)
+
+### PROBLEMS FOR NEXT TASKS
+- Task 4.6.3 (commit only happens after barrier) requires task 4.5 barrier implementation first
+- Task 4.5 should add integration tests for the full barrier → select → commit flow
+- Tip: selectBestCandidate preserves the original candidate objects in the result
+
+### VERIFICATION RESULTS
+- Ran: `bun test tests/auto-loop-decision.test.ts` - 93 pass, 0 fail, 132 expect() calls
+- Previous test count: 56 tests
+- New test count: 93 tests (+37 new tests)
+- All acceptance criteria covered:
+  - aggregateTrustScores conservative (min) behavior ✓
+  - selectBestCandidate tiebreaker logic ✓
+  - Select candidate with highest trust (goal progress based) ✓
+  - Reject all candidates if none >= 80 ✓
+
+### LEARNINGS
+- [PROMOTE:PAT] Pattern: Test describe groups mirror function edge case categories
+  - Evidence: tests/auto-loop-decision.test.ts:aggregateTrustScores has "empty input", "single verification", "conservative aggregation", "consensus calculation", "edge cases"
+  - Use case: Makes it easy to find and add tests for specific behaviors
+- [PROMOTE:CONV] Convention: Test boundary values explicitly (79, 80, 0, 100)
+  - Evidence: Tests for "exactly 79" (rejects), "exactly 80" (accepts), trust score 0 and 100
+  - Prevents off-by-one errors in threshold comparisons
+- [PROMOTE:PAT] Pattern: Test that original input is not mutated
+  - Evidence: "does not modify original candidates array" test verifies array[0] reference unchanged
+  - Use case: Ensures pure functions don't have side effects
+
+Time taken: ~15 minutes

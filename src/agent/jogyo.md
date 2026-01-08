@@ -20,7 +20,9 @@ permission:
   retrospective-store: allow
   read: allow
   write:
-    "./gyoshu/**": allow
+    "./notebooks/**": allow
+    "./reports/**": allow
+    "./gyoshu/retrospectives/**": allow  # Only retrospectives, not research
     "*": ask
 ---
 
@@ -61,7 +63,8 @@ Use these markers to structure your output:
 - `[CORR]` - Correlations
 
 ### Artifacts
-- `[PLOT]` - Generated visualizations
+- `[FIGURE:type:path=...:dpi=...:lib=...]` - Generated visualizations (preferred - see Rich Plotting Protocol)
+- `[PLOT]` - Legacy visualization marker (use [FIGURE] for new code)
 - `[ARTIFACT]` - Saved files
 - `[TABLE]` - Tabular output
 
@@ -583,6 +586,428 @@ Before completing any ML task, verify:
 | `[INDEPENDENT_CHECK]` | Result verified by alternative method |
 | `[ARTIFACT_VERIFIED]` | Claimed file confirmed to exist |
 | `[REWORK_COMPLETE]` | All challenges addressed |
+
+## Rich Plotting Protocol (RPP v1)
+
+> **⚠️ MANDATORY: Every research task MUST produce publication-quality figures.**
+>
+> Figures are not optional decorations—they are primary evidence. Research without visualizations is incomplete.
+
+### FIGURE Marker Format
+
+Replace the legacy `[PLOT]` marker with the richer `[FIGURE]` marker that captures metadata:
+
+```
+[FIGURE:type:path=figures/plot.png:dpi=300:lib=seaborn]
+```
+
+**Marker Components:**
+
+| Component | Required | Description | Example Values |
+|-----------|----------|-------------|----------------|
+| `type` | Yes | Plot type identifier | `histogram`, `scatter`, `heatmap`, `confusion_matrix` |
+| `path=` | Yes | Relative path from reports dir | `figures/distribution.png` |
+| `dpi=` | No | Resolution (default: 300) | `150`, `300`, `600` |
+| `lib=` | No | Library used | `matplotlib`, `seaborn`, `plotly` |
+
+**Valid Figure Types:**
+
+| Category | Types |
+|----------|-------|
+| **Distribution** | `histogram`, `kde`, `box`, `violin`, `ecdf`, `rug` |
+| **Relationship** | `scatter`, `line`, `heatmap`, `pairplot`, `jointplot`, `regplot` |
+| **Categorical** | `bar`, `count`, `strip`, `swarm`, `point` |
+| **Matrix/Grid** | `heatmap`, `clustermap`, `facetgrid` |
+| **ML-Specific** | `confusion_matrix`, `roc_curve`, `precision_recall`, `feature_importance`, `learning_curve`, `calibration_curve`, `shap_summary`, `shap_waterfall` |
+| **Statistical** | `residuals`, `qq_plot`, `bland_altman`, `forest_plot` |
+| **3D/Advanced** | `3d_scatter`, `3d_surface`, `contour`, `hexbin` |
+
+### save_figure() Helper Function
+
+Use this template to save figures with proper metadata markers:
+
+```python
+import os
+import matplotlib.pyplot as plt
+
+def save_figure(fig, name: str, report_title: str, fig_type: str = "plot", 
+                dpi: int = 300, lib: str = "matplotlib"):
+    """
+    Save a figure with proper metadata marker for report generation.
+    
+    Args:
+        fig: matplotlib Figure object (or plt for current figure)
+        name: Filename without extension (e.g., "correlation_heatmap")
+        report_title: Research report title (used for path construction)
+        fig_type: Figure type identifier (e.g., "heatmap", "scatter")
+        dpi: Resolution in dots per inch (default: 300 for publication)
+        lib: Library used ("matplotlib", "seaborn", "plotly")
+    
+    Returns:
+        str: Relative path to saved figure
+    """
+    # Construct path
+    figures_dir = f"reports/{report_title}/figures"
+    os.makedirs(figures_dir, exist_ok=True)
+    
+    filename = f"{name}.png"
+    filepath = f"{figures_dir}/{filename}"
+    relative_path = f"figures/{filename}"
+    
+    # Save with tight bounding box to prevent clipping
+    if hasattr(fig, 'savefig'):
+        fig.savefig(filepath, dpi=dpi, bbox_inches='tight', facecolor='white')
+    else:
+        plt.savefig(filepath, dpi=dpi, bbox_inches='tight', facecolor='white')
+    
+    # Emit structured marker
+    print(f"[FIGURE:{fig_type}:path={relative_path}:dpi={dpi}:lib={lib}]")
+    
+    return filepath
+
+# Usage example:
+# fig, ax = plt.subplots(figsize=(10, 6))
+# sns.heatmap(correlation_matrix, ax=ax)
+# save_figure(fig, "correlation_heatmap", "customer-churn", fig_type="heatmap", lib="seaborn")
+```
+
+### Minimum Figure Requirements by Goal Type
+
+Different research types require different minimum numbers of figures:
+
+| Goal Type | Min Figures | Required Figure Types |
+|-----------|-------------|----------------------|
+| **EDA** | 5 | distribution (2+), relationship (2+), summary (1+) |
+| **ML Classification** | 5 | confusion_matrix, roc_curve, feature_importance, learning_curve, distribution (1+) |
+| **ML Regression** | 5 | residuals, actual_vs_predicted, feature_importance, learning_curve, distribution (1+) |
+| **Statistical** | 3 | distribution (1+), relationship/test visualization (1+), effect visualization (1+) |
+| **Time Series** | 4 | line_series (1+), seasonality (1+), autocorrelation (1+), forecast (1+) |
+| **Clustering** | 4 | scatter_clusters, elbow_curve, silhouette, cluster_profiles |
+
+**EDA Figure Checklist:**
+- [ ] Target variable distribution
+- [ ] Feature distributions (histograms/KDE for continuous, bar for categorical)
+- [ ] Correlation heatmap or pairplot
+- [ ] Missing data visualization
+- [ ] At least one bivariate relationship plot
+
+**ML Classification Figure Checklist:**
+- [ ] Confusion matrix with annotations
+- [ ] ROC curve with AUC score
+- [ ] Precision-recall curve (especially for imbalanced data)
+- [ ] Feature importance (permutation or SHAP)
+- [ ] Learning curve (training vs validation)
+
+**ML Regression Figure Checklist:**
+- [ ] Residuals vs fitted values
+- [ ] Actual vs predicted scatter
+- [ ] Residual distribution (Q-Q plot or histogram)
+- [ ] Feature importance
+- [ ] Learning curve
+
+**Statistical Analysis Figure Checklist:**
+- [ ] Data distribution by group
+- [ ] Effect size visualization (forest plot or Cohen's d bar)
+- [ ] Test-specific plot (box plot for t-test, scatter for correlation)
+
+### Plot Type Recommendations
+
+Use the right plot for the right data:
+
+| Data Situation | Recommended Plot | Library | Notes |
+|----------------|------------------|---------|-------|
+| **1 continuous variable** | histogram + KDE | seaborn | Use `histplot(kde=True)` |
+| **1 categorical variable** | bar or count plot | seaborn | Use `countplot()` |
+| **2 continuous variables** | scatter | seaborn/matplotlib | Add regression line with `regplot()` |
+| **2 categorical variables** | heatmap (crosstab) | seaborn | Use `heatmap()` with `annot=True` |
+| **1 continuous + 1 categorical** | box or violin | seaborn | Violin shows distribution shape |
+| **Many continuous variables** | pairplot or heatmap | seaborn | Heatmap for >10 variables |
+| **Time series** | line plot | matplotlib | Use `plot_date()` for dates |
+| **Confusion matrix** | heatmap | seaborn | Use `annot=True, fmt='d'` |
+| **ROC curve** | line plot | matplotlib | Include diagonal reference |
+| **Feature importance** | horizontal bar | matplotlib | Sort descending |
+| **Distributions by group** | violin or ridge | seaborn | Ridge for many groups |
+| **Correlation matrix** | heatmap | seaborn | Use `mask` for lower triangle |
+| **3D relationships** | 3d_scatter | matplotlib | Use sparingly - 2D often clearer |
+| **Geographic data** | choropleth | plotly/folium | Interactive preferred |
+
+### Seaborn Styling Best Practices
+
+Always apply consistent styling for publication-quality figures:
+
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Set publication-quality defaults at start of analysis
+def setup_plotting_style():
+    """Configure matplotlib/seaborn for publication-quality figures."""
+    # Use seaborn's clean style
+    sns.set_theme(style="whitegrid", context="paper", font_scale=1.2)
+    
+    # Set colorblind-friendly palette
+    sns.set_palette("colorblind")
+    
+    # High-quality figure defaults
+    plt.rcParams.update({
+        'figure.figsize': (10, 6),
+        'figure.dpi': 100,  # Display DPI
+        'savefig.dpi': 300,  # Save DPI (publication quality)
+        'savefig.bbox': 'tight',
+        'font.size': 12,
+        'axes.titlesize': 14,
+        'axes.labelsize': 12,
+        'xtick.labelsize': 10,
+        'ytick.labelsize': 10,
+        'legend.fontsize': 10,
+        'figure.titlesize': 16,
+        'axes.spines.top': False,
+        'axes.spines.right': False,
+    })
+
+# Call at start of notebook
+setup_plotting_style()
+```
+
+**Colorblind-Friendly Palettes:**
+```python
+# Recommended palettes (all colorblind-safe)
+sns.set_palette("colorblind")      # Default 6-color palette
+sns.set_palette("deep")            # Deeper saturation
+sns.color_palette("Set2")          # Good for categorical
+sns.color_palette("viridis")       # Good for sequential
+sns.color_palette("RdYlBu")        # Good for diverging
+```
+
+### Code Templates for Common Plot Types
+
+#### 1. Distribution Plots
+
+```python
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+def plot_distributions(df, numeric_cols, report_title, max_cols=6):
+    """Plot distribution of numeric columns."""
+    cols = numeric_cols[:max_cols]
+    n_cols = min(3, len(cols))
+    n_rows = (len(cols) + n_cols - 1) // n_cols
+    
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(5*n_cols, 4*n_rows))
+    axes = axes.flatten() if n_rows * n_cols > 1 else [axes]
+    
+    for idx, col in enumerate(cols):
+        sns.histplot(df[col].dropna(), kde=True, ax=axes[idx])
+        axes[idx].set_title(f'{col} Distribution')
+        axes[idx].set_xlabel(col)
+    
+    # Hide empty subplots
+    for idx in range(len(cols), len(axes)):
+        axes[idx].set_visible(False)
+    
+    plt.tight_layout()
+    save_figure(fig, "distributions", report_title, fig_type="histogram", lib="seaborn")
+    plt.show()
+```
+
+#### 2. Correlation Heatmap
+
+```python
+def plot_correlation_heatmap(df, report_title, method='pearson'):
+    """Plot correlation heatmap with lower triangle mask."""
+    import numpy as np
+    
+    # Calculate correlation matrix
+    corr = df.select_dtypes(include=[np.number]).corr(method=method)
+    
+    # Create mask for upper triangle
+    mask = np.triu(np.ones_like(corr, dtype=bool))
+    
+    fig, ax = plt.subplots(figsize=(12, 10))
+    sns.heatmap(corr, mask=mask, annot=True, fmt='.2f', 
+                cmap='RdYlBu_r', center=0, 
+                square=True, linewidths=0.5, ax=ax,
+                cbar_kws={'shrink': 0.8})
+    ax.set_title(f'Correlation Matrix ({method.title()})')
+    
+    plt.tight_layout()
+    save_figure(fig, "correlation_heatmap", report_title, fig_type="heatmap", lib="seaborn")
+    plt.show()
+```
+
+#### 3. Confusion Matrix
+
+```python
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
+def plot_confusion_matrix(y_true, y_pred, labels, report_title, normalize=False):
+    """Plot confusion matrix with proper annotations."""
+    cm = confusion_matrix(y_true, y_pred, labels=labels)
+    
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        fmt = '.2%'
+    else:
+        fmt = 'd'
+    
+    fig, ax = plt.subplots(figsize=(8, 6))
+    sns.heatmap(cm, annot=True, fmt=fmt, cmap='Blues',
+                xticklabels=labels, yticklabels=labels, ax=ax)
+    ax.set_xlabel('Predicted')
+    ax.set_ylabel('Actual')
+    ax.set_title('Confusion Matrix')
+    
+    plt.tight_layout()
+    save_figure(fig, "confusion_matrix", report_title, fig_type="confusion_matrix", lib="seaborn")
+    plt.show()
+```
+
+#### 4. ROC Curve
+
+```python
+from sklearn.metrics import roc_curve, auc
+
+def plot_roc_curve(y_true, y_prob, report_title, class_names=None):
+    """Plot ROC curve with AUC score."""
+    fig, ax = plt.subplots(figsize=(8, 6))
+    
+    if len(y_prob.shape) == 1:  # Binary classification
+        fpr, tpr, _ = roc_curve(y_true, y_prob)
+        roc_auc = auc(fpr, tpr)
+        ax.plot(fpr, tpr, lw=2, label=f'ROC curve (AUC = {roc_auc:.3f})')
+    else:  # Multi-class
+        from sklearn.preprocessing import label_binarize
+        classes = np.unique(y_true)
+        y_bin = label_binarize(y_true, classes=classes)
+        for i, cls in enumerate(classes):
+            fpr, tpr, _ = roc_curve(y_bin[:, i], y_prob[:, i])
+            roc_auc = auc(fpr, tpr)
+            name = class_names[i] if class_names else f'Class {cls}'
+            ax.plot(fpr, tpr, lw=2, label=f'{name} (AUC = {roc_auc:.3f})')
+    
+    ax.plot([0, 1], [0, 1], 'k--', lw=1, label='Random')
+    ax.set_xlim([0.0, 1.0])
+    ax.set_ylim([0.0, 1.05])
+    ax.set_xlabel('False Positive Rate')
+    ax.set_ylabel('True Positive Rate')
+    ax.set_title('ROC Curve')
+    ax.legend(loc='lower right')
+    
+    plt.tight_layout()
+    save_figure(fig, "roc_curve", report_title, fig_type="roc_curve", lib="matplotlib")
+    plt.show()
+```
+
+#### 5. Feature Importance
+
+```python
+def plot_feature_importance(feature_names, importances, report_title, 
+                            std=None, top_n=15, method='permutation'):
+    """Plot feature importance as horizontal bar chart."""
+    # Sort by importance
+    indices = np.argsort(importances)[::-1][:top_n]
+    
+    fig, ax = plt.subplots(figsize=(10, max(6, top_n * 0.4)))
+    
+    y_pos = np.arange(len(indices))
+    bars = ax.barh(y_pos, importances[indices], align='center')
+    
+    if std is not None:
+        ax.errorbar(importances[indices], y_pos, xerr=std[indices], 
+                   fmt='none', color='black', capsize=3)
+    
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels([feature_names[i] for i in indices])
+    ax.invert_yaxis()  # Top feature at top
+    ax.set_xlabel('Importance')
+    ax.set_title(f'Feature Importance ({method.title()})')
+    
+    plt.tight_layout()
+    save_figure(fig, "feature_importance", report_title, fig_type="feature_importance", lib="matplotlib")
+    plt.show()
+```
+
+#### 6. Learning Curve
+
+```python
+from sklearn.model_selection import learning_curve
+
+def plot_learning_curve(estimator, X, y, report_title, cv=5, n_jobs=-1):
+    """Plot learning curve showing training vs validation performance."""
+    train_sizes, train_scores, val_scores = learning_curve(
+        estimator, X, y, cv=cv, n_jobs=n_jobs,
+        train_sizes=np.linspace(0.1, 1.0, 10),
+        scoring='accuracy'
+    )
+    
+    train_mean = train_scores.mean(axis=1)
+    train_std = train_scores.std(axis=1)
+    val_mean = val_scores.mean(axis=1)
+    val_std = val_scores.std(axis=1)
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    ax.fill_between(train_sizes, train_mean - train_std, train_mean + train_std, alpha=0.1)
+    ax.fill_between(train_sizes, val_mean - val_std, val_mean + val_std, alpha=0.1)
+    ax.plot(train_sizes, train_mean, 'o-', label='Training score')
+    ax.plot(train_sizes, val_mean, 'o-', label='Validation score')
+    
+    ax.set_xlabel('Training Examples')
+    ax.set_ylabel('Score')
+    ax.set_title('Learning Curve')
+    ax.legend(loc='lower right')
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    save_figure(fig, "learning_curve", report_title, fig_type="learning_curve", lib="matplotlib")
+    plt.show()
+```
+
+#### 7. Residual Analysis (Regression)
+
+```python
+def plot_residuals(y_true, y_pred, report_title):
+    """Plot residual analysis for regression models."""
+    residuals = y_true - y_pred
+    
+    fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+    
+    # Residuals vs Fitted
+    axes[0].scatter(y_pred, residuals, alpha=0.5)
+    axes[0].axhline(y=0, color='r', linestyle='--')
+    axes[0].set_xlabel('Fitted Values')
+    axes[0].set_ylabel('Residuals')
+    axes[0].set_title('Residuals vs Fitted')
+    
+    # Residual distribution
+    sns.histplot(residuals, kde=True, ax=axes[1])
+    axes[1].set_xlabel('Residuals')
+    axes[1].set_title('Residual Distribution')
+    
+    # Q-Q plot
+    from scipy import stats
+    stats.probplot(residuals, dist="norm", plot=axes[2])
+    axes[2].set_title('Q-Q Plot')
+    
+    plt.tight_layout()
+    save_figure(fig, "residuals_analysis", report_title, fig_type="residuals", lib="seaborn")
+    plt.show()
+```
+
+### Figure Quality Checklist
+
+Before completing any research task, verify your figures meet these standards:
+
+- [ ] **All figures saved at 300 DPI** (publication quality)
+- [ ] **Proper `[FIGURE:...]` markers emitted** for each saved figure
+- [ ] **Minimum figure count met** for goal type
+- [ ] **Colorblind-friendly palette** used (colorblind, viridis, Set2)
+- [ ] **Clear titles and labels** on all axes
+- [ ] **Legend included** where multiple series present
+- [ ] **Consistent styling** across all figures
+- [ ] **Figures saved to** `reports/{reportTitle}/figures/`
+- [ ] **No text clipping** (use `bbox_inches='tight'`)
+- [ ] **White background** for print compatibility
 
 ## Stage Execution Protocol
 

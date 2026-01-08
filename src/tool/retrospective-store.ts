@@ -16,6 +16,7 @@ import {
   getRetrospectivesFeedbackPath,
   ensureDirSync,
 } from "../lib/paths";
+import { openNoFollowSync, readFileNoFollowSync } from "../lib/atomic-write";
 
 interface RetrospectiveFeedback {
   id: string;
@@ -68,24 +69,64 @@ function loadAllFeedback(): RetrospectiveFeedback[] {
     return [];
   }
   
-  const lines = fs.readFileSync(filePath, "utf-8").split("\n").filter(l => l.trim());
-  const feedback: RetrospectiveFeedback[] = [];
-  
-  for (const line of lines) {
-    try {
-      feedback.push(JSON.parse(line));
-    } catch {
-      // Skip malformed lines
+  try {
+    const lines = readFileNoFollowSync(filePath).split("\n").filter(l => l.trim());
+    const feedback: RetrospectiveFeedback[] = [];
+    
+    for (const line of lines) {
+      try {
+        feedback.push(JSON.parse(line));
+      } catch {
+        // Skip malformed lines
+      }
     }
+    
+    return feedback;
+  } catch {
+    return [];
   }
-  
-  return feedback;
 }
 
 function appendFeedback(feedback: RetrospectiveFeedback): void {
   ensureRetroDir();
   const filePath = getFeedbackFile();
-  fs.appendFileSync(filePath, JSON.stringify(feedback) + "\n");
+  
+  // Security: Validate parent directory is not a symlink (prevents escape attacks)
+  const parentDir = path.dirname(filePath);
+  const parentStat = fs.lstatSync(parentDir);
+  if (parentStat.isSymbolicLink()) {
+    throw new Error(`Security: parent directory ${parentDir} is a symlink`);
+  }
+  
+  // Security: Use O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
+  // Two-step approach: try open existing, then create with O_EXCL if missing
+  let fd: number;
+  try {
+    // Try opening existing file - O_NOFOLLOW will cause ELOOP if symlink
+    fd = openNoFollowSync(filePath, fs.constants.O_WRONLY | fs.constants.O_APPEND);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      // File doesn't exist - create with O_EXCL (fails if anything exists, including symlinks)
+      fd = fs.openSync(
+        filePath,
+        fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL,
+        0o600
+      );
+    } else {
+      throw err;
+    }
+  }
+  
+  try {
+    // Defense-in-depth: verify we opened a regular file
+    const fdStat = fs.fstatSync(fd);
+    if (!fdStat.isFile()) {
+      throw new Error(`Security: opened target is not a regular file`);
+    }
+    fs.writeSync(fd, JSON.stringify(feedback) + "\n");
+  } finally {
+    fs.closeSync(fd);
+  }
   updateIndex(feedback);
 }
 
@@ -100,7 +141,7 @@ function loadIndex(): StoreIndex {
   }
   
   try {
-    return JSON.parse(fs.readFileSync(indexPath, "utf-8"));
+    return JSON.parse(readFileNoFollowSync(indexPath));
   } catch {
     return {
       lastUpdated: new Date().toISOString(),
@@ -112,7 +153,20 @@ function loadIndex(): StoreIndex {
 
 function saveIndex(index: StoreIndex): void {
   ensureRetroDir();
-  fs.writeFileSync(getIndexPath(), JSON.stringify(index, null, 2));
+  const indexPath = getIndexPath();
+  const tempPath = `${indexPath}.tmp.${process.pid}`;
+  
+  try {
+    // Use 'wx' for exclusive creation (won't follow symlinks)
+    fs.writeFileSync(tempPath, JSON.stringify(index, null, 2), { flag: 'wx', mode: 0o600 });
+    fs.renameSync(tempPath, indexPath);
+  } finally {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // Temp file may already be renamed
+    }
+  }
 }
 
 function updateIndex(feedback: RetrospectiveFeedback): void {

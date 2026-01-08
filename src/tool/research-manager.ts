@@ -28,7 +28,7 @@
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { durableAtomicWrite, fileExists, readFile } from "../lib/atomic-write";
+import { durableAtomicWrite, fileExists, readFile, readFileNoFollow } from "../lib/atomic-write";
 import {
   getResearchDir,
   getResearchPath,
@@ -43,6 +43,7 @@ import {
   ensureDirSync,
   validatePathSegment,
 } from "../lib/paths";
+import { isPathContainedIn } from "../lib/path-security";
 import { 
   extractFrontmatter, 
   GyoshuFrontmatter,
@@ -51,6 +52,7 @@ import {
 } from "../lib/notebook-frontmatter";
 import { generateReport } from "../lib/report-markdown";
 import { exportReportToPdf, detectAvailableConverters } from "../lib/pdf-export";
+import { createInitialState, saveState as saveAutoLoopState, loadState as loadAutoLoopState } from "../lib/auto-loop-state";
 import type { Notebook, NotebookCell } from "../lib/cell-identity";
 
 // =============================================================================
@@ -232,34 +234,8 @@ interface SearchResult {
 // VALIDATION
 // =============================================================================
 
-/**
- * Validates that an ID is safe to use in file paths.
- * Prevents directory traversal and other path injection attacks.
- *
- * @param id - The ID to validate
- * @param type - Type of ID for error messages ("researchId" or "runId")
- * @throws Error if ID is invalid
- */
-function validateId(id: string, type: string): void {
-  if (!id || typeof id !== "string") {
-    throw new Error(`${type} is required and must be a string`);
-  }
-
-  // Prevent path traversal attacks
-  if (id.includes("..") || id.includes("/") || id.includes("\\")) {
-    throw new Error(`Invalid ${type}: contains path traversal characters`);
-  }
-
-  // Prevent empty or whitespace-only IDs
-  if (id.trim().length === 0) {
-    throw new Error(`Invalid ${type}: cannot be empty or whitespace`);
-  }
-
-  // Limit length to prevent filesystem issues
-  if (id.length > 255) {
-    throw new Error(`Invalid ${type}: exceeds maximum length of 255 characters`);
-  }
-}
+// validateId removed - use validatePathSegment from ../lib/paths instead
+// validatePathSegment provides stronger security: NFC Unicode normalization, null byte check
 
 // =============================================================================
 // REPORT TITLE GENERATION
@@ -575,7 +551,7 @@ interface NotebookResearchItem {
  */
 async function loadNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch {
     return null;
@@ -709,7 +685,7 @@ export default tool({
 
   args: {
     action: tool.schema
-      .enum(["create", "get", "list", "update", "delete", "addRun", "getRun", "updateRun", "search", "workspace-list", "workspace-create", "workspace-sync"])
+      .enum(["create", "get", "list", "update", "delete", "addRun", "getRun", "updateRun", "search", "workspace-list", "workspace-create", "workspace-sync", "activate-auto", "deactivate-auto"])
       .describe("Operation to perform on research or runs"),
     researchId: tool.schema
       .string()
@@ -790,8 +766,8 @@ export default tool({
             );
           }
 
-          await fs.mkdir(getNotebookRootDir(), { recursive: true });
-          await fs.mkdir(reportDir, { recursive: true });
+          ensureDirSync(getNotebookRootDir());
+          ensureDirSync(reportDir);
 
           const now = new Date().toISOString();
           const frontmatter: GyoshuFrontmatter = {
@@ -832,7 +808,7 @@ export default tool({
         if (!args.researchId) {
           throw new Error("reportTitle or researchId is required for create action");
         }
-        validateId(args.researchId, "researchId");
+        validatePathSegment(args.researchId, "researchId");
 
         const manifestPath = getResearchManifestPath(args.researchId);
 
@@ -870,7 +846,7 @@ export default tool({
         if (!args.researchId) {
           throw new Error("researchId is required for get action");
         }
-        validateId(args.researchId, "researchId");
+        validatePathSegment(args.researchId, "researchId");
 
         const manifestPath = getResearchManifestPath(args.researchId);
 
@@ -1044,7 +1020,7 @@ export default tool({
         if (!args.researchId) {
           throw new Error("reportTitle or researchId is required for update action");
         }
-        validateId(args.researchId, "researchId");
+        validatePathSegment(args.researchId, "researchId");
 
         const manifestPath = getResearchManifestPath(args.researchId);
 
@@ -1101,12 +1077,17 @@ export default tool({
         if (!args.researchId) {
           throw new Error("researchId is required for delete action");
         }
-        validateId(args.researchId, "researchId");
+        validatePathSegment(args.researchId, "researchId");
 
         const researchPath = getResearchPath(args.researchId);
 
         if (!(await fileExists(researchPath))) {
           throw new Error(`Research '${args.researchId}' not found`);
+        }
+
+        // Security: Verify path is contained within research directory before deletion
+        if (!isPathContainedIn(researchPath, getResearchDir(), { useRealpath: true })) {
+          throw new Error(`Security: ${researchPath} escapes containment`);
         }
 
         await fs.rm(researchPath, { recursive: true, force: true });
@@ -1134,8 +1115,8 @@ export default tool({
         if (!args.runId) {
           throw new Error("runId is required for addRun action");
         }
-        validateId(args.researchId, "researchId");
-        validateId(args.runId, "runId");
+        validatePathSegment(args.researchId, "researchId");
+        validatePathSegment(args.runId, "runId");
 
         const manifestPath = getResearchManifestPath(args.researchId);
         const runDetailPath = getRunPath(args.researchId, args.runId);
@@ -1211,8 +1192,8 @@ export default tool({
         if (!args.runId) {
           throw new Error("runId is required for getRun action");
         }
-        validateId(args.researchId, "researchId");
-        validateId(args.runId, "runId");
+        validatePathSegment(args.researchId, "researchId");
+        validatePathSegment(args.runId, "runId");
 
         const manifestPath = getResearchManifestPath(args.researchId);
         const runDetailPath = getRunPath(args.researchId, args.runId);
@@ -1257,8 +1238,8 @@ export default tool({
         if (!args.runId) {
           throw new Error("runId is required for updateRun action");
         }
-        validateId(args.researchId, "researchId");
-        validateId(args.runId, "runId");
+        validatePathSegment(args.researchId, "researchId");
+        validatePathSegment(args.runId, "runId");
 
         const manifestPath = getResearchManifestPath(args.researchId);
         const runDetailPath = getRunPath(args.researchId, args.runId);
@@ -1481,6 +1462,116 @@ export default tool({
             reportTitle,
             pdfPath: path.relative(process.cwd(), result.pdfPath!),
             converter: result.converter,
+          },
+          null,
+          2
+        );
+      }
+
+      case "activate-auto": {
+        const { reportTitle } = args;
+        const data = args.data as { 
+          researchSessionID: string; 
+          runId: string;
+          maxIterations?: number;
+          maxAttempts?: number;
+          maxCycles?: number;
+          maxToolCalls?: number;
+          maxTimeMinutes?: number;
+        } | undefined;
+
+        if (!reportTitle) {
+          throw new Error("reportTitle is required for activate-auto action");
+        }
+        if (!data?.researchSessionID) {
+          throw new Error("data.researchSessionID is required for activate-auto action");
+        }
+        if (!data?.runId) {
+          throw new Error("data.runId is required for activate-auto action");
+        }
+
+        validatePathSegment(reportTitle, "reportTitle");
+
+        const existingState = await loadAutoLoopState(reportTitle);
+        if (existingState?.active) {
+          throw new Error(
+            `Auto-loop already active for '${reportTitle}'. Use 'deactivate-auto' first.`
+          );
+        }
+
+        const state = createInitialState(
+          reportTitle,
+          data.researchSessionID,
+          data.runId,
+          {
+            maxIterations: data.maxIterations,
+            maxAttempts: data.maxAttempts,
+            maxCycles: data.maxCycles,
+            maxToolCalls: data.maxToolCalls,
+            maxTimeMinutes: data.maxTimeMinutes,
+          }
+        );
+
+        await saveAutoLoopState(state);
+
+        return JSON.stringify(
+          {
+            success: true,
+            action: "activate-auto",
+            reportTitle,
+            state: {
+              active: state.active,
+              iteration: state.iteration,
+              maxIterations: state.maxIterations,
+              budgets: state.budgets,
+              attemptNumber: state.attemptNumber,
+              maxAttempts: state.maxAttempts,
+            },
+            statePath: `reports/${reportTitle}/auto/loop-state.json`,
+          },
+          null,
+          2
+        );
+      }
+
+      case "deactivate-auto": {
+        const { reportTitle } = args;
+
+        if (!reportTitle) {
+          throw new Error("reportTitle is required for deactivate-auto action");
+        }
+
+        validatePathSegment(reportTitle, "reportTitle");
+
+        const existingState = await loadAutoLoopState(reportTitle);
+        if (!existingState) {
+          return JSON.stringify(
+            {
+              success: true,
+              action: "deactivate-auto",
+              reportTitle,
+              message: "No auto-loop state found (already inactive)",
+            },
+            null,
+            2
+          );
+        }
+
+        existingState.active = false;
+        await saveAutoLoopState(existingState);
+
+        return JSON.stringify(
+          {
+            success: true,
+            action: "deactivate-auto",
+            reportTitle,
+            message: "Auto-loop deactivated",
+            finalState: {
+              active: existingState.active,
+              iteration: existingState.iteration,
+              lastDecision: existingState.lastDecision,
+              budgets: existingState.budgets,
+            },
           },
           null,
           2

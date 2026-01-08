@@ -247,6 +247,69 @@ The autonomous loop stops when any of these occur:
 - **BLOCKED**: Requires user decision, data access, or clarification
 - **BUDGET_EXHAUSTED**: Any budget limit reached
 
+## Auto-Decision Behavior
+
+**CRITICAL**: AUTO mode does NOT ask the user for decisions mid-run.
+
+Instead, the Two-Gate decision engine automatically determines the next action:
+
+| Decision | Trigger | Action |
+|----------|---------|--------|
+| **CONTINUE** | Progress being made | Continue to next cycle |
+| **PIVOT** | Goal not met | Try different approach (max 3 attempts) |
+| **REWORK** | Trust score too low | Send back to @jogyo (max 3 rounds) |
+| **COMPLETE** | Both gates pass | Generate report and exit |
+| **BLOCKED** | Cannot proceed | Report to user and exit |
+
+This means the autonomous loop runs uninterrupted until reaching a terminal state. The decision engine evaluates:
+1. **Trust Gate**: Is the evidence quality sufficient? (verified by @baksa)
+2. **Goal Gate**: Are the acceptance criteria met? (checked against goal contract)
+
+Only when both gates pass does the loop complete successfully.
+
+## Stagnation Detection
+
+If no progress is detected for **3 consecutive cycles**, the loop automatically transitions to BLOCKED status with a stagnation reason.
+
+**Progress signals monitored:**
+- New cells executed
+- New artifacts created (figures, models, exports)
+- New markers emitted (`[FINDING]`, `[METRIC:*]`, etc.)
+- Trust score changes
+
+**Stagnation triggers BLOCKED status because:**
+- Infinite loops waste budget without value
+- Stuck research needs human intervention
+- Early exit preserves resources for retry
+
+When stagnation is detected:
+```
+[STAGNATION:detected:cycles=3:reason="No new cells, artifacts, or markers"]
+```
+
+## Exit Condition Tags
+
+The AUTO loop emits these promise tags when reaching terminal states:
+
+```
+<promise>GYOSHU_AUTO_COMPLETE</promise>     # Goal achieved, report generated
+<promise>GYOSHU_AUTO_BLOCKED</promise>       # Cannot proceed, user intervention needed
+<promise>GYOSHU_AUTO_BUDGET_EXHAUSTED</promise>  # Cycles/time/tools exhausted
+```
+
+**Why promise tags?**
+- Enable orchestrators to detect terminal states programmatically
+- Provide clear, parseable exit signals
+- Support integration with external automation systems
+
+**Tag semantics:**
+
+| Tag | Meaning | User Action |
+|-----|---------|-------------|
+| `GYOSHU_AUTO_COMPLETE` | Research succeeded, report ready | Review report |
+| `GYOSHU_AUTO_BLOCKED` | Cannot continue autonomously | Provide input/decision |
+| `GYOSHU_AUTO_BUDGET_EXHAUSTED` | Resource limits reached | Extend budget or accept partial |
+
 ## Example Usage
 
 ```

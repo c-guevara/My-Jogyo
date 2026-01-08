@@ -49,8 +49,9 @@ import {
   getSchemaVersion,
   shortenSessionId,
   clearRuntimeDirCache,
+  validatePathSegment,
   type GyoshuConfig,
-} from "./paths";
+} from "../src/lib/paths";
 
 // =============================================================================
 // TEST SETUP
@@ -122,6 +123,24 @@ describe("detectProjectRoot", () => {
     const root = detectProjectRoot();
 
     expect(root).toBe(customRoot);
+  });
+
+  test("rejects symlinked GYOSHU_PROJECT_ROOT (FIX-165)", () => {
+    const realDir = path.join(testDir, "real-project-root");
+    const symlinkDir = path.join(testDir, "symlink-project-root");
+    fs.mkdirSync(realDir, { recursive: true });
+    fs.symlinkSync(realDir, symlinkDir);
+    process.env.GYOSHU_PROJECT_ROOT = symlinkDir;
+
+    const isolatedDir = path.join(testDir, "fallback-for-symlink");
+    fs.mkdirSync(isolatedDir, { recursive: true });
+    process.chdir(isolatedDir);
+    clearProjectRootCache();
+
+    const root = detectProjectRoot();
+
+    expect(root).not.toBe(symlinkDir);
+    expect(root).toBe(isolatedDir);
   });
 
   test("finds root by gyoshu/config.json marker", () => {
@@ -405,7 +424,7 @@ describe("getResearchArtifactsDir", () => {
 describe("getRuntimeDir", () => {
   test("respects GYOSHU_RUNTIME_DIR environment variable", () => {
     const customRuntime = path.join(testDir, "custom-runtime");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
 
     const runtimeDir = getRuntimeDir();
@@ -413,9 +432,9 @@ describe("getRuntimeDir", () => {
     expect(runtimeDir).toBe(customRuntime);
   });
 
-  test("uses XDG_RUNTIME_DIR when set", () => {
+  test("uses XDG_RUNTIME_DIR when set with secure mode", () => {
     const xdgRuntime = path.join(testDir, "xdg-runtime");
-    fs.mkdirSync(xdgRuntime, { recursive: true });
+    fs.mkdirSync(xdgRuntime, { recursive: true, mode: 0o700 });
     process.env.XDG_RUNTIME_DIR = xdgRuntime;
 
     const runtimeDir = getRuntimeDir();
@@ -423,10 +442,20 @@ describe("getRuntimeDir", () => {
     expect(runtimeDir).toBe(path.join(xdgRuntime, "gyoshu"));
   });
 
+  test("rejects XDG_RUNTIME_DIR with insecure mode", () => {
+    const xdgRuntime = path.join(testDir, "xdg-runtime-insecure");
+    fs.mkdirSync(xdgRuntime, { recursive: true, mode: 0o755 });
+    process.env.XDG_RUNTIME_DIR = xdgRuntime;
+
+    const runtimeDir = getRuntimeDir();
+
+    expect(runtimeDir).not.toContain("xdg-runtime-insecure");
+  });
+
   test("GYOSHU_RUNTIME_DIR takes priority over XDG_RUNTIME_DIR", () => {
     const customRuntime = path.join(testDir, "custom");
     const xdgRuntime = path.join(testDir, "xdg");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     fs.mkdirSync(xdgRuntime, { recursive: true });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
     process.env.XDG_RUNTIME_DIR = xdgRuntime;
@@ -457,10 +486,30 @@ describe("getRuntimeDir", () => {
 });
 
 describe("shortenSessionId", () => {
-  test("returns short session IDs unchanged", () => {
-    expect(shortenSessionId("abc123")).toBe("abc123");
-    expect(shortenSessionId("session")).toBe("session");
-    expect(shortenSessionId("12chars1234")).toBe("12chars1234");
+  test("always hashes session IDs (security: prevents path traversal)", () => {
+    const shortId1 = shortenSessionId("abc123");
+    const shortId2 = shortenSessionId("session");
+    const shortId3 = shortenSessionId("12chars1234");
+
+    expect(shortId1.length).toBe(12);
+    expect(shortId2.length).toBe(12);
+    expect(shortId3.length).toBe(12);
+    expect(/^[0-9a-f]{12}$/.test(shortId1)).toBe(true);
+    expect(/^[0-9a-f]{12}$/.test(shortId2)).toBe(true);
+    expect(/^[0-9a-f]{12}$/.test(shortId3)).toBe(true);
+  });
+
+  test("hashes malicious short IDs (security: path traversal prevention)", () => {
+    const traversal1 = shortenSessionId("..");
+    const traversal2 = shortenSessionId("../x");
+    const traversal3 = shortenSessionId("../..");
+
+    expect(traversal1).not.toBe("..");
+    expect(traversal2).not.toBe("../x");
+    expect(traversal3).not.toBe("../..");
+    expect(/^[0-9a-f]{12}$/.test(traversal1)).toBe(true);
+    expect(/^[0-9a-f]{12}$/.test(traversal2)).toBe(true);
+    expect(/^[0-9a-f]{12}$/.test(traversal3)).toBe(true);
   });
 
   test("hashes long session IDs to 12 characters", () => {
@@ -472,35 +521,38 @@ describe("shortenSessionId", () => {
   });
 
   test("produces consistent hashes for same input", () => {
-    const longId = "consistent-session-id-for-testing";
-    const hash1 = shortenSessionId(longId);
-    const hash2 = shortenSessionId(longId);
+    const id = "consistent-session-id";
+    const hash1 = shortenSessionId(id);
+    const hash2 = shortenSessionId(id);
 
     expect(hash1).toBe(hash2);
   });
 
   test("produces different hashes for different inputs", () => {
-    const hash1 = shortenSessionId("session-one-long-name");
-    const hash2 = shortenSessionId("session-two-long-name");
+    const hash1 = shortenSessionId("session-one");
+    const hash2 = shortenSessionId("session-two");
 
     expect(hash1).not.toBe(hash2);
   });
 });
 
 describe("getSessionDir", () => {
-  test("returns session directory with short session ID", () => {
+  test("always hashes session IDs (security: prevents traversal)", () => {
     const customRuntime = path.join(testDir, "runtime");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
 
     const sessionDir = getSessionDir("short-id");
+    const dirName = path.basename(sessionDir);
 
-    expect(sessionDir).toBe(path.join(customRuntime, "short-id"));
+    expect(sessionDir.startsWith(customRuntime)).toBe(true);
+    expect(dirName.length).toBe(12);
+    expect(/^[0-9a-f]{12}$/.test(dirName)).toBe(true);
   });
 
   test("hashes long session IDs for socket path safety", () => {
     const customRuntime = path.join(testDir, "runtime");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
 
     const longSessionId = "very-long-session-id-that-would-cause-socket-path-issues";
@@ -512,35 +564,37 @@ describe("getSessionDir", () => {
 });
 
 describe("getSessionLockPath", () => {
-  test("returns session.lock path in session directory", () => {
+  test("returns session.lock path in hashed session directory", () => {
     const customRuntime = path.join(testDir, "runtime");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
 
     const lockPath = getSessionLockPath("test-session");
+    const hashedSessionDir = shortenSessionId("test-session");
 
     expect(lockPath).toBe(
-      path.join(customRuntime, "test-session", "session.lock")
+      path.join(customRuntime, hashedSessionDir, "session.lock")
     );
   });
 });
 
 describe("getBridgeSocketPath", () => {
-  test("returns bridge.sock path in session directory", () => {
+  test("returns bridge.sock path in hashed session directory", () => {
     const customRuntime = path.join(testDir, "runtime");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
 
     const socketPath = getBridgeSocketPath("test-session");
+    const hashedSessionDir = shortenSessionId("test-session");
 
     expect(socketPath).toBe(
-      path.join(customRuntime, "test-session", "bridge.sock")
+      path.join(customRuntime, hashedSessionDir, "bridge.sock")
     );
   });
 
   test("socket path length stays within Unix limits", () => {
     const customRuntime = path.join(testDir, "runtime");
-    fs.mkdirSync(customRuntime, { recursive: true });
+    fs.mkdirSync(customRuntime, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = customRuntime;
 
     const longSessionId = "extremely-long-session-id-that-would-normally-exceed-unix-socket-path-limits-of-108-bytes";
@@ -889,7 +943,7 @@ describe("path consistency", () => {
     const projectDir = path.join(testDir, "separate");
     const runtimeEnvDir = path.join(testDir, "runtime-env");
     fs.mkdirSync(projectDir, { recursive: true });
-    fs.mkdirSync(runtimeEnvDir, { recursive: true });
+    fs.mkdirSync(runtimeEnvDir, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_PROJECT_ROOT = projectDir;
     process.env.GYOSHU_RUNTIME_DIR = runtimeEnvDir;
     clearProjectRootCache();
@@ -924,7 +978,7 @@ describe("path consistency", () => {
 
   test("session paths are nested under runtime", () => {
     const runtimeEnvDir = path.join(testDir, "session-runtime");
-    fs.mkdirSync(runtimeEnvDir, { recursive: true });
+    fs.mkdirSync(runtimeEnvDir, { recursive: true, mode: 0o700 });
     process.env.GYOSHU_RUNTIME_DIR = runtimeEnvDir;
 
     const sessionId = "test-session";
@@ -1248,5 +1302,112 @@ describe("notebook and report path consistency", () => {
 
     expect(notebookPath.startsWith(projectDir)).toBe(true);
     expect(reportDir.startsWith(projectDir)).toBe(true);
+  });
+});
+
+// =============================================================================
+// VALIDATE PATH SEGMENT - WINDOWS RESERVED NAMES TESTS
+// =============================================================================
+
+describe("validatePathSegment - Windows reserved names", () => {
+  test("rejects CON", () => {
+    expect(() => validatePathSegment("CON", "test")).toThrow("reserved");
+  });
+
+  test("rejects NUL.txt (reserved name with extension)", () => {
+    expect(() => validatePathSegment("NUL.txt", "test")).toThrow("reserved");
+  });
+
+  test("rejects com1 (case insensitive)", () => {
+    expect(() => validatePathSegment("com1", "test")).toThrow("reserved");
+  });
+
+  test("rejects PRN", () => {
+    expect(() => validatePathSegment("PRN", "test")).toThrow("reserved");
+  });
+
+  test("rejects AUX", () => {
+    expect(() => validatePathSegment("AUX", "test")).toThrow("reserved");
+  });
+
+  test("rejects LPT1", () => {
+    expect(() => validatePathSegment("LPT1", "test")).toThrow("reserved");
+  });
+
+  test("rejects COM9.data (reserved name with extension)", () => {
+    expect(() => validatePathSegment("COM9.data", "test")).toThrow("reserved");
+  });
+
+  test("accepts valid names that contain reserved words", () => {
+    expect(() => validatePathSegment("my-con-file", "test")).not.toThrow();
+    expect(() => validatePathSegment("icon", "test")).not.toThrow();
+    expect(() => validatePathSegment("console", "test")).not.toThrow();
+    expect(() => validatePathSegment("null-value", "test")).not.toThrow();
+  });
+
+  test("rejects CONIN$", () => {
+    expect(() => validatePathSegment("CONIN$", "test")).toThrow("reserved");
+  });
+
+  test("rejects CONOUT$", () => {
+    expect(() => validatePathSegment("CONOUT$", "test")).toThrow("reserved");
+  });
+
+  test("rejects CLOCK$", () => {
+    expect(() => validatePathSegment("CLOCK$", "test")).toThrow("reserved");
+  });
+
+  test("rejects COM\u00b9 (superscript 1)", () => {
+    expect(() => validatePathSegment("COM\u00b9", "test")).toThrow("reserved");
+  });
+
+  test("rejects LPT\u00b2 (superscript 2)", () => {
+    expect(() => validatePathSegment("LPT\u00b2", "test")).toThrow("reserved");
+  });
+
+  test("rejects COM\u00b3 (superscript 3)", () => {
+    expect(() => validatePathSegment("COM\u00b3", "test")).toThrow("reserved");
+  });
+
+  test("rejects 'CON .txt' (FIX-135: space before dot bypass)", () => {
+    expect(() => validatePathSegment("CON .txt", "test")).toThrow("reserved");
+  });
+
+  test("rejects 'NUL  .txt' (multiple spaces before dot)", () => {
+    expect(() => validatePathSegment("NUL  .txt", "test")).toThrow("reserved");
+  });
+
+  test("rejects 'COM1 ' (trailing space only - caught by reserved or trailing check)", () => {
+    expect(() => validatePathSegment("COM1 ", "test")).toThrow();
+  });
+
+  test("rejects 'COM1..txt' (dots before extension - caught by path traversal)", () => {
+    expect(() => validatePathSegment("COM1..txt", "test")).toThrow("path traversal");
+  });
+});
+
+describe("validatePathSegment - trailing dots and spaces", () => {
+  test("rejects trailing dot", () => {
+    expect(() => validatePathSegment("file.", "test")).toThrow("trailing");
+  });
+
+  test("rejects trailing space", () => {
+    expect(() => validatePathSegment("file ", "test")).toThrow("trailing");
+  });
+
+  test("rejects multiple trailing dots (caught by path traversal check)", () => {
+    expect(() => validatePathSegment("file..", "test")).toThrow("path traversal");
+  });
+
+  test("accepts leading dot (hidden file convention)", () => {
+    expect(() => validatePathSegment(".hidden", "test")).not.toThrow();
+  });
+
+  test("accepts dots in the middle", () => {
+    expect(() => validatePathSegment("file.name.txt", "test")).not.toThrow();
+  });
+
+  test("accepts spaces in the middle", () => {
+    expect(() => validatePathSegment("file name", "test")).not.toThrow();
   });
 });

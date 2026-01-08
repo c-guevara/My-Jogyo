@@ -22,7 +22,7 @@ afterEach(async () => {
 });
 
 describe("Auto-Capture: splitIntoLines", () => {
-  const { splitIntoLines } = require("../.opencode/tool/python-repl.ts");
+  const { splitIntoLines } = require("../src/tool/python-repl.ts");
 
   test("splits single line without trailing newline", () => {
     const result = splitIntoLines("hello");
@@ -51,7 +51,7 @@ describe("Auto-Capture: splitIntoLines", () => {
 });
 
 describe("Auto-Capture: convertExecuteResultToOutputs", () => {
-  const { convertExecuteResultToOutputs } = require("../.opencode/tool/python-repl.ts");
+  const { convertExecuteResultToOutputs } = require("../src/tool/python-repl.ts");
 
   test("converts stdout to stream output", () => {
     const result = {
@@ -159,7 +159,7 @@ describe("Auto-Capture: convertExecuteResultToOutputs", () => {
 });
 
 describe("Auto-Capture: appendCodeCellToNotebook", () => {
-  const { appendCodeCellToNotebook } = require("../.opencode/tool/python-repl.ts");
+  const { appendCodeCellToNotebook } = require("../src/tool/python-repl.ts");
 
   test("creates new notebook when file doesn't exist", async () => {
     const notebookPath = path.join(tempDir, "new-notebook.ipynb");
@@ -295,7 +295,7 @@ describe("Auto-Capture: Execution Counter", () => {
     getExecutionCount, 
     resetExecutionCounter,
     getNextExecutionCount 
-  } = require("../.opencode/tool/python-repl.ts");
+  } = require("../src/tool/python-repl.ts");
 
   beforeEach(() => {
     resetExecutionCounter("counter-test-session");

@@ -8,10 +8,13 @@ import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
-import { durableAtomicWrite } from "../lib/atomic-write";
+import { durableAtomicWrite, readFileNoFollow } from "../lib/atomic-write";
 import { ensureCellId, NotebookCell, Notebook } from "../lib/cell-identity";
-import { ensureDirSync, getNotebookPath, validatePathSegment } from "../lib/paths";
+import { ensureDirSync, getNotebookPath, getNotebookRootDir, validatePathSegment } from "../lib/paths";
+import { isPathContainedIn } from "../lib/path-security";
 import { ensureFrontmatterCell, GyoshuFrontmatter } from "../lib/notebook-frontmatter";
+import { getNotebookLockPath, DEFAULT_LOCK_TIMEOUT_MS } from "../lib/lock-paths";
+import { withLock } from "../lib/session-lock";
 
 // =============================================================================
 // INTERNAL INTERFACES
@@ -116,7 +119,7 @@ function generateCellId(): string {
 
 async function readNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
@@ -126,17 +129,40 @@ async function readNotebook(notebookPath: string): Promise<Notebook | null> {
   }
 }
 
+/**
+ * Helper to derive a lock identifier from a notebook path.
+ * Extracts the basename without .ipynb extension.
+ *
+ * @param notebookPath - Absolute path to the notebook file
+ * @returns Lock identifier (e.g., "customer-churn" from "/path/to/customer-churn.ipynb")
+ */
+function deriveLockIdFromPath(notebookPath: string): string {
+  const basename = path.basename(notebookPath, ".ipynb");
+  return basename || "unknown";
+}
+
 async function saveNotebookWithCellIds(
   notebookPath: string,
-  notebook: Notebook
+  notebook: Notebook,
+  lockIdentifier?: string
 ): Promise<void> {
+  // In-memory operations (no lock needed)
   for (let i = 0; i < notebook.cells.length; i++) {
     ensureCellId(notebook.cells[i], i, notebookPath);
   }
   notebook.nbformat = 4;
   notebook.nbformat_minor = 5;
+
+  // Directory creation (idempotent, no lock needed)
   ensureDirSync(path.dirname(notebookPath));
-  await durableAtomicWrite(notebookPath, JSON.stringify(notebook, null, 2));
+
+  // File write (needs lock for parallel safety)
+  const lockId = lockIdentifier || deriveLockIdFromPath(notebookPath);
+  await withLock(
+    getNotebookLockPath(lockId),
+    async () => await durableAtomicWrite(notebookPath, JSON.stringify(notebook, null, 2)),
+    DEFAULT_LOCK_TIMEOUT_MS
+  );
 }
 
 export default tool({
@@ -222,6 +248,32 @@ export default tool({
       });
     }
 
+    // Security: validate notebookPath is within notebooks directory
+    if (!isPathContainedIn(notebookPath, getNotebookRootDir())) {
+      return JSON.stringify({
+        success: false,
+        error: "notebookPath must be within the notebooks directory",
+      });
+    }
+
+    // Security: reject symlinks to prevent directory escape attacks
+    try {
+      const stats = await fs.lstat(notebookPath);
+      if (stats.isSymbolicLink()) {
+        return JSON.stringify({
+          success: false,
+          error: "notebookPath must not be a symbolic link",
+        });
+      }
+    } catch (e) {
+      // File doesn't exist yet - that's OK for create operations
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        throw e;
+      }
+    }
+
+    const lockIdentifier = reportTitle || deriveLockIdFromPath(notebookPath);
+
     let notebook = await readNotebook(notebookPath);
     const isNew = notebook === null;
 
@@ -258,7 +310,7 @@ export default tool({
           }
         }
 
-        await saveNotebookWithCellIds(notebookPath, nb);
+        await saveNotebookWithCellIds(notebookPath, nb, lockIdentifier);
         return JSON.stringify({
           success: true,
           created: isNew,
@@ -302,7 +354,7 @@ export default tool({
         }
 
         nb.cells.push(cell);
-        await saveNotebookWithCellIds(notebookPath, nb);
+        await saveNotebookWithCellIds(notebookPath, nb, lockIdentifier);
 
         return JSON.stringify({
           success: true,
@@ -342,7 +394,7 @@ export default tool({
             };
           }
 
-          await saveNotebookWithCellIds(notebookPath, nb);
+          await saveNotebookWithCellIds(notebookPath, nb, lockIdentifier);
 
           return JSON.stringify({
             success: true,
@@ -356,7 +408,7 @@ export default tool({
           cell.source = reportSource;
           nb.cells.unshift(cell);
 
-          await saveNotebookWithCellIds(notebookPath, nb);
+          await saveNotebookWithCellIds(notebookPath, nb, lockIdentifier);
 
           return JSON.stringify({
             success: true,
@@ -372,7 +424,7 @@ export default tool({
         const gyoshu = nb.metadata.gyoshu as GyoshuNotebookMetadata;
         gyoshu.finalized = new Date().toISOString();
 
-        await saveNotebookWithCellIds(notebookPath, nb);
+        await saveNotebookWithCellIds(notebookPath, nb, lockIdentifier);
 
         return JSON.stringify({
           success: true,

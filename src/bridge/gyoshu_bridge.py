@@ -35,8 +35,9 @@ import threading
 import gc
 import argparse
 import socket as socket_module
+import stat
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Callable
+from typing import Any, Dict, List, Optional, Callable, Tuple
 
 # =============================================================================
 # STREAM SEPARATION
@@ -77,11 +78,10 @@ def send_response(
     id: Optional[str], result: Optional[Dict] = None, error: Optional[Dict] = None
 ) -> None:
     """Send JSON-RPC 2.0 response via protocol channel."""
-    response: Dict[str, Any] = {"jsonrpc": JSON_RPC_VERSION}
-
-    # id must be included (null for notifications, but we always have id)
-    if id is not None:
-        response["id"] = id
+    response: Dict[str, Any] = {
+        "jsonrpc": JSON_RPC_VERSION,
+        "id": id,
+    }
 
     if error is not None:
         response["error"] = error
@@ -247,6 +247,66 @@ def parse_markers(text: str) -> List[Dict[str, Any]]:
 
 
 # =============================================================================
+# BOUNDED STRING IO (FIX-158: Prevent memory exhaustion)
+# =============================================================================
+
+
+def _get_max_capture_chars() -> int:
+    """Safely parse GYOSHU_MAX_CAPTURE_CHARS env var with validation.
+
+    Returns:
+        Capture limit in characters, clamped to [10KB, 100MB] range.
+        Default: 1MB (1048576 chars).
+    """
+    default = 1048576  # 1MB
+    env_val = os.getenv("GYOSHU_MAX_CAPTURE_CHARS", "")
+    # FIX-167: Guard against DoS via extremely long numeric strings
+    # 20 digits is plenty for any sane value (10^20 > 100MB limit anyway)
+    if len(env_val) > 20:
+        return default
+    if not env_val:
+        return default
+    try:
+        val = int(env_val)
+        # Clamp to sane range: 10KB min, 100MB max
+        return max(10240, min(val, 104857600))
+    except (ValueError, TypeError):
+        return default
+
+
+MAX_CAPTURE_CHARS = _get_max_capture_chars()
+
+
+class BoundedStringIO:
+    """StringIO wrapper that caps capture size to prevent memory exhaustion."""
+
+    def __init__(self, limit: int = MAX_CAPTURE_CHARS):
+        self._buffer = io.StringIO()
+        self._limit = limit
+        self._truncated = False
+
+    def write(self, s: str) -> int:
+        if self._truncated:
+            return len(s)
+        current = self._buffer.tell()
+        if current + len(s) > self._limit:
+            remaining = self._limit - current
+            if remaining > 0:
+                self._buffer.write(s[:remaining])
+            self._buffer.write("\n...[truncated]")
+            self._truncated = True
+            return len(s)
+        return self._buffer.write(s)
+
+    def getvalue(self) -> str:
+        return self._buffer.getvalue()
+
+    @property
+    def truncated(self) -> bool:
+        return self._truncated
+
+
+# =============================================================================
 # MEMORY UTILITIES
 # =============================================================================
 
@@ -400,13 +460,15 @@ def execute_code(
     Returns:
         Dict with success, stdout, stderr, exception info
     """
-    stdout_capture = io.StringIO()
-    stderr_capture = io.StringIO()
+    stdout_capture = BoundedStringIO()
+    stderr_capture = BoundedStringIO()
 
     result = {
         "success": False,
         "stdout": "",
         "stderr": "",
+        "stdout_truncated": False,
+        "stderr_truncated": False,
         "exception": None,
         "exception_type": None,
         "traceback": None,
@@ -456,7 +518,6 @@ def execute_code(
         )
 
     finally:
-        # Cancel timeout
         if timeout and hasattr(signal, "SIGALRM"):
             signal.alarm(0)
             if old_handler is not None:
@@ -464,6 +525,8 @@ def execute_code(
 
         result["stdout"] = stdout_capture.getvalue()
         result["stderr"] = stderr_capture.getvalue()
+        result["stdout_truncated"] = stdout_capture.truncated
+        result["stderr_truncated"] = stderr_capture.truncated
 
     return result
 
@@ -525,6 +588,8 @@ def handle_execute(id: str, params: Dict[str, Any]) -> None:
         "success": exec_result["success"],
         "stdout": exec_result["stdout"],
         "stderr": exec_result["stderr"],
+        "stdout_truncated": exec_result.get("stdout_truncated", False),
+        "stderr_truncated": exec_result.get("stderr_truncated", False),
         "markers": markers,
         "artifacts": [],  # TODO: Artifact detection from namespace
         "timing": {
@@ -587,6 +652,38 @@ HANDLERS: Dict[str, Callable[[str, Dict[str, Any]], None]] = {
 # =============================================================================
 # MAIN LOOP
 # =============================================================================
+
+# FIX-173: Cap JSON-RPC request line size to prevent DoS
+MAX_REQUEST_LINE_BYTES = 10 * 1024 * 1024  # 10MB
+
+
+def read_bounded_line(stream, max_bytes: int) -> Tuple[Optional[bytes], bool]:
+    """Read a line with bounded byte count.
+
+    Returns:
+        Tuple of (line_bytes or None if EOF, was_oversized)
+        - If EOF with no data: (None, False)
+        - If line fits in limit: (bytes, False)
+        - If line exceeded limit: (truncated_bytes, True) - already drained to newline
+    """
+    data = bytearray()
+    while len(data) < max_bytes:
+        char = stream.read(1)
+        if not char:
+            # EOF - return what we have
+            return (bytes(data) if data else None, False)
+        if char == b"\n":
+            # Normal line termination
+            return (bytes(data), False)
+        data.extend(char)
+
+    # Limit exceeded - drain rest of line (already consumes up to and including \n)
+    while True:
+        char = stream.read(1)
+        if not char or char == b"\n":
+            break
+    # Return truncated data with oversized flag - no peek needed by caller
+    return (bytes(data[:max_bytes]), True)
 
 
 def process_request(line: str) -> None:
@@ -679,14 +776,53 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def safe_unlink_socket(socket_path: str) -> None:
+    """Safely unlink a socket file, handling races and verifying type.
+
+    Handles FileNotFoundError (race conditions) and verifies the file
+    is actually a socket before unlinking to avoid removing non-socket files.
+    """
+    try:
+        st = os.lstat(socket_path)
+        if stat.S_ISSOCK(st.st_mode):
+            os.unlink(socket_path)
+    except FileNotFoundError:
+        pass  # Already removed, that's fine
+    except OSError:
+        pass  # Best effort - socket may have been removed between lstat and unlink
+
+
 def run_socket_server(socket_path: str) -> None:
     global _protocol_out
 
-    if os.path.exists(socket_path):
-        os.unlink(socket_path)
+    # Safely remove existing socket
+    safe_unlink_socket(socket_path)
 
     server = socket_module.socket(socket_module.AF_UNIX, socket_module.SOCK_STREAM)
-    server.bind(socket_path)
+    old_umask = os.umask(0o177)
+    try:
+        server.bind(socket_path)
+        # Post-bind verification: ensure socket has expected ownership and mode
+        try:
+            st = os.lstat(socket_path)
+            if not stat.S_ISSOCK(st.st_mode):
+                raise RuntimeError(
+                    f"Post-bind check failed: {socket_path} is not a socket"
+                )
+            if st.st_uid != os.getuid():
+                raise RuntimeError(
+                    f"Post-bind check failed: {socket_path} not owned by us"
+                )
+            mode = st.st_mode & 0o777
+            if mode != 0o600:
+                raise RuntimeError(
+                    f"Post-bind check failed: {socket_path} has mode {oct(mode)}, expected 0o600"
+                )
+        except Exception:
+            server.close()
+            raise
+    finally:
+        os.umask(old_umask)
     server.listen(1)
 
     print(
@@ -699,8 +835,7 @@ def run_socket_server(socket_path: str) -> None:
         print("[gyoshu_bridge] Shutdown signal received", file=sys.stderr)
         sys.stderr.flush()
         server.close()
-        if os.path.exists(socket_path):
-            os.unlink(socket_path)
+        safe_unlink_socket(socket_path)
         sys.exit(0)
 
     signal.signal(signal.SIGTERM, shutdown_handler)
@@ -715,8 +850,7 @@ def run_socket_server(socket_path: str) -> None:
         traceback.print_exc(file=sys.stderr)
     finally:
         server.close()
-        if os.path.exists(socket_path):
-            os.unlink(socket_path)
+        safe_unlink_socket(socket_path)
 
 
 def handle_socket_connection(conn: socket_module.socket) -> None:
@@ -725,9 +859,19 @@ def handle_socket_connection(conn: socket_module.socket) -> None:
     try:
         _protocol_out = conn.makefile("w", buffering=1, encoding="utf-8")
 
-        reader = conn.makefile("r", encoding="utf-8")
-        for line in reader:
-            line = line.strip()
+        reader = conn.makefile("rb")
+        while True:
+            line_bytes, was_oversized = read_bounded_line(
+                reader, MAX_REQUEST_LINE_BYTES
+            )
+            if line_bytes is None:
+                break
+            if was_oversized:
+                send_response(
+                    None, error=make_error(ERROR_INVALID_REQUEST, "Request too large")
+                )
+                continue
+            line = line_bytes.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
             process_request(line)
@@ -751,8 +895,18 @@ def run_stdin_mode() -> None:
     sys.stderr.flush()
 
     try:
-        for line in sys.stdin:
-            line = line.strip()
+        while True:
+            line_bytes, was_oversized = read_bounded_line(
+                sys.stdin.buffer, MAX_REQUEST_LINE_BYTES
+            )
+            if line_bytes is None:
+                break
+            if was_oversized:
+                send_response(
+                    None, error=make_error(ERROR_INVALID_REQUEST, "Request too large")
+                )
+                continue
+            line = line_bytes.decode("utf-8", errors="replace").strip()
             if not line:
                 continue
 

@@ -14,7 +14,7 @@ import * as crypto from 'crypto';
 import checkpointManager from '../src/tool/checkpoint-manager';
 import { clearProjectRootCache } from '../src/lib/paths';
 
-const BRIDGE_PATH = path.join(__dirname, '..', '.opencode', 'bridge', 'gyoshu_bridge.py');
+const BRIDGE_PATH = path.join(__dirname, '..', 'src', 'bridge', 'gyoshu_bridge.py');
 const REQUEST_TIMEOUT_MS = 5000;
 
 interface JsonRpcRequest {
@@ -92,6 +92,7 @@ class TestBridge {
   }> = new Map();
   private requestCounter = 0;
   private stderrBuffer = '';
+  private stderrTruncated = false;
 
   async start(): Promise<void> {
     if (this.process) {
@@ -116,8 +117,16 @@ class TestBridge {
       this.handleResponse(line);
     });
 
+    const MAX_STDERR_CHARS = 64 * 1024;
     this.process.stderr.on('data', (chunk: Buffer) => {
-      this.stderrBuffer += chunk.toString();
+      if (this.stderrTruncated) return;
+      const text = chunk.toString();
+      if (this.stderrBuffer.length + text.length > MAX_STDERR_CHARS) {
+        this.stderrBuffer = this.stderrBuffer.slice(0, MAX_STDERR_CHARS - 20) + "\n...[truncated]";
+        this.stderrTruncated = true;
+        return;
+      }
+      this.stderrBuffer += text;
     });
 
     await new Promise(resolve => setTimeout(resolve, 100));

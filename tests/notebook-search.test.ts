@@ -20,10 +20,10 @@ import * as path from "path";
 import * as os from "os";
 
 // Import the notebook-search tool
-import notebookSearch from "./notebook-search";
+import notebookSearch from "../src/tool/notebook-search";
 
 // Import path utilities
-import { clearProjectRootCache, getResearchNotebooksDir, getResearchDir } from "../lib/paths";
+import { clearProjectRootCache, getResearchNotebooksDir, getResearchDir } from "../src/lib/paths";
 
 // =============================================================================
 // TEST SETUP

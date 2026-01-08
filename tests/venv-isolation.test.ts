@@ -3,7 +3,7 @@ import * as fs from "fs/promises";
 import * as fss from "fs";
 import * as path from "path";
 import * as os from "os";
-import { detectAvailableTools, resetToolCache } from "../.opencode/tool/python-repl";
+import { detectAvailableTools, resetToolCache } from "../src/tool/python-repl";
 
 const TEMP_DIR = path.join(os.tmpdir(), "gyoshu-venv-test");
 

@@ -5,7 +5,7 @@ import {
   getMarkersByType,
   getMarkersByCategory,
   MARKER_TAXONOMY,
-} from './marker-parser';
+} from '../src/lib/marker-parser';
 
 describe('marker-parser', () => {
   describe('MARKER_TAXONOMY', () => {

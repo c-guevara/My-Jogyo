@@ -18,17 +18,23 @@ import * as fs from "fs";
 import * as fsp from "fs/promises";
 import * as net from "net";
 import * as crypto from "crypto";
-import { SessionLock } from "../lib/session-lock";
+import { SessionLock, getCurrentProcessStartTime, isProcessAlive as isProcessAliveWithStartTime, getProcessStartTimeLinux, getProcessStartTimeMacOS } from "../lib/session-lock";
+import { durableAtomicWrite, fileExists, readFile, readFileNoFollow, readFileNoFollowSync } from "../lib/atomic-write";
 import {
   getSessionDir,
+  getSessionDirByShortId,
   getSessionLockPath,
   getBridgeSocketPath,
   getRuntimeDir,
   ensureDirSync,
   getNotebookPath,
+  getNotebookRootDir,
+  shortenSessionId,
+  validatePathSegment,
 } from "../lib/paths";
-import { durableAtomicWrite } from "../lib/atomic-write";
 import { ensureCellId, NotebookCell, Notebook } from "../lib/cell-identity";
+import { getNotebookLockPath, getBridgeMetaLockPath, getBridgeMetaLockPathByShortId, DEFAULT_LOCK_TIMEOUT_MS } from "../lib/lock-paths";
+import { withLock } from "../lib/session-lock";
 import {
   extractFrontmatter,
   updateFrontmatter,
@@ -36,6 +42,51 @@ import {
   addRun,
   RunEntry,
 } from "../lib/notebook-frontmatter";
+import { isPathContainedIn } from "../lib/path-security";
+import { BridgeMeta, isValidBridgeMeta } from "../lib/bridge-meta";
+
+/**
+ * Safely unlink a socket file only if it's actually a socket.
+ * Prevents accidentally deleting regular files that happen to have the same path.
+ * 
+ * @param socketPath - Path to the socket file to unlink
+ */
+function safeUnlinkSocket(socketPath: string): void {
+  try {
+    const stat = fs.lstatSync(socketPath);
+    if (stat.isSocket()) {
+      fs.unlinkSync(socketPath);
+    } else {
+      // Not a socket - log and skip (security: don't delete wrong file type)
+      console.warn(`[python-repl] Refusing to unlink non-socket file: ${socketPath}`);
+    }
+  } catch (err: unknown) {
+    // ENOENT is fine (file doesn't exist)
+    // Other errors: skip unlink but don't throw
+    const nodeErr = err as NodeJS.ErrnoException;
+    if (nodeErr.code !== 'ENOENT') {
+      console.warn(`[python-repl] lstat failed for ${socketPath}: ${nodeErr.message}`);
+    }
+  }
+}
+
+/**
+ * Check if a path exists and is a Unix socket.
+ * Returns false for non-existent paths or non-socket files (regular files, symlinks, etc.).
+ * 
+ * Security: Prevents socket hijacking via regular file or symlink substitution.
+ * 
+ * @param filePath - Path to check
+ * @returns true if path exists and is a socket, false otherwise
+ */
+function isSocket(filePath: string): boolean {
+  try {
+    const stat = fs.lstatSync(filePath);
+    return stat.isSocket();
+  } catch {
+    return false;
+  }
+}
 
 const DEFAULT_EXECUTION_TIMEOUT_MS = 300000;
 const DEFAULT_QUEUE_TIMEOUT_MS = 30000;
@@ -43,22 +94,27 @@ const DEFAULT_GRACE_PERIOD_MS = 5000;
 const DEFAULT_SIGTERM_GRACE_MS = 3000;
 const BRIDGE_SPAWN_TIMEOUT_MS = 5000;
 
+// FIX-154: Kill process group helper for complete cleanup of spawned subprocesses
+function killProcessGroup(pid: number, signal: NodeJS.Signals): void {
+  if (process.platform === "win32") {
+    try { process.kill(pid, signal); } catch {}
+  } else {
+    try {
+      process.kill(-pid, signal);  // Kill process group (negative PID)
+    } catch {
+      try { process.kill(pid, signal); } catch {}  // Fallback to single process
+    }
+  }
+}
+
 const ERROR_QUEUE_TIMEOUT = -32004;
 const ERROR_BRIDGE_FAILED = -32005;
 const ERROR_INVALID_ACTION = -32006;
 
 /** Simplified Python environment info - only .venv supported */
-interface PythonEnvInfo {
+interface PythonEnvInfoLocal {
   pythonPath: string;
   type: "venv";
-}
-
-interface BridgeMeta {
-  pid: number;
-  socketPath: string;
-  startedAt: string;
-  sessionId: string;
-  pythonEnv?: PythonEnvInfo;
 }
 
 interface ExecuteResult {
@@ -203,27 +259,60 @@ function createEmptyNotebook(sessionId: string): Notebook {
 
 async function readNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fsp.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    const code = (error as NodeJS.ErrnoException).code;
+    // ENOENT = file doesn't exist, ELOOP = symlink (O_NOFOLLOW)
+    if (code === "ENOENT" || code === "ELOOP") {
       return null;
     }
     throw error;
   }
 }
 
+function deriveLockIdFromPath(notebookPath: string): string {
+  const basename = path.basename(notebookPath, ".ipynb");
+  return basename || "unknown";
+}
+
 async function saveNotebookWithCellIds(
   notebookPath: string,
-  notebook: Notebook
+  notebook: Notebook,
+  lockIdentifier?: string
 ): Promise<void> {
+  // Security: Validate notebookPath is contained within notebooks directory
+  // Use useRealpath: false because file may not exist yet
+  if (!isPathContainedIn(notebookPath, getNotebookRootDir(), { useRealpath: false })) {
+    throw new Error(`Security: notebookPath escapes notebooks directory: ${notebookPath}`);
+  }
+
+  // Security: Reject symlinks to prevent symlink attacks
+  try {
+    const stat = await fsp.lstat(notebookPath);
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Security: notebookPath is a symlink: ${notebookPath}`);
+    }
+  } catch (e) {
+    // ENOENT is OK - file doesn't exist yet
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw e;
+    }
+  }
+
   for (let i = 0; i < notebook.cells.length; i++) {
     ensureCellId(notebook.cells[i], i, notebookPath);
   }
   notebook.nbformat = 4;
   notebook.nbformat_minor = 5;
   ensureDirSync(path.dirname(notebookPath));
-  await durableAtomicWrite(notebookPath, JSON.stringify(notebook, null, 2));
+
+  const lockId = lockIdentifier || deriveLockIdFromPath(notebookPath);
+  await withLock(
+    getNotebookLockPath(lockId),
+    async () => await durableAtomicWrite(notebookPath, JSON.stringify(notebook, null, 2)),
+    DEFAULT_LOCK_TIMEOUT_MS
+  );
 }
 
 export async function appendCodeCellToNotebook(
@@ -258,7 +347,8 @@ export async function appendCodeCellToNotebook(
     };
 
     notebook!.cells.push(cell);
-    await saveNotebookWithCellIds(notebookPath, notebook!);
+    const lockIdentifier = deriveLockIdFromPath(notebookPath);
+    await saveNotebookWithCellIds(notebookPath, notebook!, lockIdentifier);
 
     return {
       captured: true,
@@ -323,7 +413,7 @@ function getBridgeMetaPath(sessionId: string): string {
   return path.join(getSessionDir(sessionId), "bridge_meta.json");
 }
 
-function detectExistingPythonEnv(projectRoot: string): PythonEnvInfo | null {
+function detectExistingPythonEnv(projectRoot: string): PythonEnvInfoLocal | null {
   const isWindows = process.platform === "win32";
   const binDir = isWindows ? "Scripts" : "bin";
   const pythonExe = isWindows ? "python.exe" : "python";
@@ -335,7 +425,7 @@ function detectExistingPythonEnv(projectRoot: string): PythonEnvInfo | null {
   return null;
 }
 
-async function ensurePythonEnvironment(projectRoot: string): Promise<PythonEnvInfo> {
+async function ensurePythonEnvironment(projectRoot: string): Promise<PythonEnvInfoLocal> {
   const existing = detectExistingPythonEnv(projectRoot);
   if (existing) {
     return existing;
@@ -356,8 +446,29 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
+async function getChildProcessStartTime(pid: number): Promise<number | undefined> {
+  if (process.platform === "linux") {
+    const startTime = await getProcessStartTimeLinux(pid);
+    return startTime ?? undefined;
+  } else if (process.platform === "darwin") {
+    const startTime = await getProcessStartTimeMacOS(pid);
+    return startTime ?? undefined;
+  }
+  return undefined;
+}
+
+async function verifyProcessIdentity(meta: BridgeMeta): Promise<boolean> {
+  // Fail-closed: if we don't have processStartTime, we can't verify identity
+  // Treat as unverified (process may have been reused by OS)
+  if (meta.processStartTime === undefined) {
+    return false;
+  }
+  return await isProcessAliveWithStartTime(meta.pid, meta.processStartTime);
+}
+
 /**
- * Read bridge metadata from disk
+ * Read bridge metadata from disk with schema validation.
+ * Returns null if file doesn't exist, parse fails, or schema is invalid.
  */
 function readBridgeMeta(sessionId: string): BridgeMeta | null {
   const metaPath = getBridgeMetaPath(sessionId);
@@ -365,35 +476,121 @@ function readBridgeMeta(sessionId: string): BridgeMeta | null {
     if (!fs.existsSync(metaPath)) {
       return null;
     }
-    const content = fs.readFileSync(metaPath, "utf-8");
-    return JSON.parse(content) as BridgeMeta;
+    const content = readFileNoFollowSync(metaPath);
+    const parsed = JSON.parse(content);
+    if (!isValidBridgeMeta(parsed)) {
+      return null;
+    }
+    return parsed;
   } catch {
     return null;
   }
 }
 
+// Rate limiter for write skip logging (one log per minute max)
+let lastWriteSkipLog = 0;
+const WRITE_SKIP_LOG_INTERVAL_MS = 60000;
+
 /**
- * Write bridge metadata to disk
+ * Write bridge metadata to disk.
+ * MERGES with existing data to preserve fields from other writers
+ * (e.g., reportTitle, notebookPath, verification from session-manager).
+ * 
+ * Uses lock + atomic write to prevent concurrent write issues.
  */
-function writeBridgeMeta(sessionId: string, meta: BridgeMeta): void {
+async function writeBridgeMeta(sessionId: string, meta: Partial<BridgeMeta>): Promise<void> {
   const metaPath = getBridgeMetaPath(sessionId);
+  const lockPath = getBridgeMetaLockPath(sessionId);
+  
   try {
-    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), "utf-8");
+    await withLock(
+      lockPath,
+      async () => {
+        let existing: Record<string, unknown> = {};
+        try {
+          if (await fileExists(metaPath)) {
+            const content = await readFile<Record<string, unknown>>(metaPath, true);
+            existing = content || {};
+          }
+        } catch {
+          // Intentional: parse errors result in empty merge base
+        }
+        
+        const merged = { ...existing, ...meta };
+        await durableAtomicWrite(metaPath, JSON.stringify(merged, null, 2));
+      },
+      DEFAULT_LOCK_TIMEOUT_MS
+    );
   } catch {
+    // Non-critical metadata - log rate-limited then skip
+    const now = Date.now();
+    if (now - lastWriteSkipLog > WRITE_SKIP_LOG_INTERVAL_MS) {
+      console.warn(`[python-repl] bridge_meta write skipped for ${sessionId} (lock timeout)`);
+      lastWriteSkipLog = now;
+    }
   }
 }
 
-/**
- * Delete bridge metadata from disk
- */
-function deleteBridgeMeta(sessionId: string): void {
+async function deleteBridgeMeta(sessionId: string): Promise<void> {
   const metaPath = getBridgeMetaPath(sessionId);
+  const lockPath = getBridgeMetaLockPath(sessionId);
+  
   try {
-    if (fs.existsSync(metaPath)) {
-      fs.unlinkSync(metaPath);
-    }
+    await withLock(
+      lockPath,
+      async () => {
+        if (fs.existsSync(metaPath)) {
+          fs.unlinkSync(metaPath);
+        }
+      },
+      DEFAULT_LOCK_TIMEOUT_MS
+    );
   } catch {
-    // Ignore errors during cleanup
+    // Ignore errors during cleanup (lock timeout or unlink failure)
+  }
+}
+
+// =============================================================================
+// SHORT ID HELPERS (for cleanup when directory names are already hashed)
+// =============================================================================
+
+function getBridgeMetaPathByShortId(shortId: string): string {
+  return path.join(getSessionDirByShortId(shortId), "bridge_meta.json");
+}
+
+function readBridgeMetaByShortId(shortId: string): BridgeMeta | null {
+  const metaPath = getBridgeMetaPathByShortId(shortId);
+  try {
+    if (!fs.existsSync(metaPath)) {
+      return null;
+    }
+    const content = readFileNoFollowSync(metaPath);
+    const parsed = JSON.parse(content);
+    if (!isValidBridgeMeta(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function deleteBridgeMetaByShortId(shortId: string): Promise<void> {
+  const metaPath = getBridgeMetaPathByShortId(shortId);
+  const lockPath = getBridgeMetaLockPathByShortId(shortId);
+  
+  try {
+    await withLock(
+      lockPath,
+      async () => {
+        if (fs.existsSync(metaPath)) {
+          fs.unlinkSync(metaPath);
+        }
+      },
+      DEFAULT_LOCK_TIMEOUT_MS
+    );
+  } catch {
+    // Ignore errors during cleanup (lock timeout or unlink failure)
   }
 }
 
@@ -410,8 +607,9 @@ async function spawnBridgeServer(sessionId: string, projectDir?: string): Promis
   const socketPath = getBridgeSocketPath(sessionId);
   const bridgePath = getBridgePath();
   
-  if (fs.existsSync(socketPath)) {
-    fs.unlinkSync(socketPath);
+  const sessionDir = getSessionDir(sessionId);
+  if (isPathContainedIn(socketPath, sessionDir, { useRealpath: true })) {
+    safeUnlinkSocket(socketPath);
   }
   
   const effectiveProjectDir = projectDir || process.cwd();
@@ -428,21 +626,37 @@ async function spawnBridgeServer(sessionId: string, projectDir?: string): Promis
   
   proc.unref();
   
+  // FIX-153: Cap stderr at 64KB to prevent memory bloat from noisy Python envs
+  const MAX_STDERR_CHARS = 64 * 1024;
   let stderrBuffer = "";
+  let stderrTruncated = false;
   proc.stderr?.on("data", (chunk: Buffer) => {
-    stderrBuffer += chunk.toString();
+    if (stderrTruncated) return;
+    const text = chunk.toString();
+    if (stderrBuffer.length + text.length > MAX_STDERR_CHARS) {
+      stderrBuffer = stderrBuffer.slice(0, MAX_STDERR_CHARS - 20) + "\n...[truncated]";
+      stderrTruncated = true;
+    } else {
+      stderrBuffer += text;
+    }
   });
   
   const startTime = Date.now();
-  while (!fs.existsSync(socketPath)) {
+  while (!isSocket(socketPath)) {
     if (Date.now() - startTime > BRIDGE_SPAWN_TIMEOUT_MS) {
-      try {
-        process.kill(proc.pid!, "SIGKILL");
-      } catch {}
-      throw new Error(`Bridge failed to start in ${BRIDGE_SPAWN_TIMEOUT_MS}ms. Stderr: ${stderrBuffer}`);
+      killProcessGroup(proc.pid!, "SIGKILL");
+      
+      // Check if something exists at socketPath that isn't a socket (poisoned/hijack attempt)
+      if (fs.existsSync(socketPath) && !isSocket(socketPath)) {
+        safeUnlinkSocket(socketPath);
+      }
+      
+      throw new Error(`Bridge failed to create socket in ${BRIDGE_SPAWN_TIMEOUT_MS}ms. Stderr: ${stderrBuffer}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
+  
+  const processStartTime = await getChildProcessStartTime(proc.pid!);
   
   const meta: BridgeMeta = {
     pid: proc.pid!,
@@ -450,31 +664,50 @@ async function spawnBridgeServer(sessionId: string, projectDir?: string): Promis
     startedAt: new Date().toISOString(),
     sessionId,
     pythonEnv,
+    processStartTime,
   };
   
-  writeBridgeMeta(sessionId, meta);
+  await writeBridgeMeta(sessionId, meta);
   
   return meta;
 }
 
 /**
- * Get or spawn a bridge server for the session
+ * Get or spawn a bridge server for the session.
+ * Implements anti-poisoning checks: verifies sessionId matches and uses identity verification.
+ * Implements anti-hijack checks: verifies socketPath is canonical and is actually a socket.
  */
 async function ensureBridge(sessionId: string, projectDir?: string): Promise<BridgeMeta> {
   const meta = readBridgeMeta(sessionId);
-  
-  if (meta && isProcessAlive(meta.pid)) {
-    if (fs.existsSync(meta.socketPath)) {
-      return meta;
-    } else {
-      try {
-        process.kill(meta.pid, "SIGKILL");
-      } catch {}
-    }
-  }
+  const expectedSocketPath = getBridgeSocketPath(sessionId);
   
   if (meta) {
-    deleteBridgeMeta(sessionId);
+    // Anti-poisoning: verify sessionId matches
+    if (meta.sessionId !== sessionId) {
+      await deleteBridgeMeta(sessionId);
+      return spawnBridgeServer(sessionId, projectDir);
+    }
+    
+    // Anti-hijack: verify socket path is expected canonical path (prevents socket path injection)
+    if (meta.socketPath !== expectedSocketPath) {
+      await deleteBridgeMeta(sessionId);
+      return spawnBridgeServer(sessionId, projectDir);
+    }
+    
+    const stillOurs = await verifyProcessIdentity(meta);
+    if (stillOurs) {
+      // Verify socket exists AND is actually a socket (not a file/symlink that could hijack)
+      if (isSocket(meta.socketPath)) {
+        return meta;
+      } else {
+        // Socket missing or wrong type - kill the orphan process
+        try {
+          process.kill(meta.pid, "SIGKILL");
+        } catch {}
+      }
+    }
+    
+    await deleteBridgeMeta(sessionId);
   }
   
   return spawnBridgeServer(sessionId, projectDir);
@@ -500,6 +733,7 @@ function sendSocketRequest<T>(
     
     let responseBuffer = "";
     let timedOut = false;
+    const MAX_RESPONSE_CHARS = 2 * 1024 * 1024;
     
     const timer = setTimeout(() => {
       timedOut = true;
@@ -508,14 +742,19 @@ function sendSocketRequest<T>(
     }, timeoutMs);
     
     const socket = net.createConnection({ path: socketPath }, () => {
-      // Connected - send request
       socket.write(request + "\n");
     });
     
     socket.on("data", (chunk: Buffer) => {
       responseBuffer += chunk.toString();
       
-      // Look for complete JSON line
+      if (responseBuffer.length > MAX_RESPONSE_CHARS) {
+        clearTimeout(timer);
+        socket.destroy();
+        reject(new Error(`Response exceeded ${MAX_RESPONSE_CHARS} characters`));
+        return;
+      }
+      
       const newlineIndex = responseBuffer.indexOf("\n");
       if (newlineIndex !== -1) {
         clearTimeout(timer);
@@ -580,16 +819,96 @@ async function killBridgeWithEscalation(
     return { terminatedBy: "already_dead", terminationTimeMs: 0 };
   }
   
-  if (!isProcessAlive(meta.pid)) {
-    deleteBridgeMeta(sessionId);
+  if (meta.sessionId !== sessionId) {
+    console.warn(`[python-repl] Session ID mismatch in killBridgeWithEscalation: expected ${sessionId}, got ${meta.sessionId}`);
+    await deleteBridgeMeta(sessionId);  // Clean up poisoned meta
+    return { terminatedBy: "already_dead", terminationTimeMs: 0 };
+  }
+  
+  if (!(await verifyProcessIdentity(meta))) {
+    await deleteBridgeMeta(sessionId);
+    return { terminatedBy: "already_dead", terminationTimeMs: 0 };
+  }
+  
+  // waitForExit uses identity verification to detect actual exit vs PID reuse
+  const waitForExit = (timeoutMs: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const checkStart = Date.now();
+      const check = async () => {
+        // Use identity verification instead of plain PID check
+        const stillOurs = await verifyProcessIdentity(meta);
+        if (!stillOurs) {
+          resolve(true);  // Process is gone or PID reused
+        } else if (Date.now() - checkStart > timeoutMs) {
+          resolve(false);
+        } else {
+          setTimeout(check, 100);
+        }
+      };
+      check();
+    });
+  };
+  
+  let terminatedBy: EscalationResult["terminatedBy"] = "SIGINT";
+  
+  killProcessGroup(meta.pid, "SIGINT");
+  
+  if (!(await waitForExit(gracePeriod))) {
+    terminatedBy = "SIGTERM";
+    killProcessGroup(meta.pid, "SIGTERM");
+    
+    if (!(await waitForExit(sigtermGrace))) {
+      terminatedBy = "SIGKILL";
+      killProcessGroup(meta.pid, "SIGKILL");
+      await waitForExit(1000);
+    }
+  }
+  
+  await deleteBridgeMeta(sessionId);
+  
+  const sessionDir = getSessionDir(sessionId);
+  try {
+    if (meta.socketPath && isPathContainedIn(meta.socketPath, sessionDir, { useRealpath: true })) {
+      safeUnlinkSocket(meta.socketPath);
+    }
+  } catch {}
+  
+  return {
+    terminatedBy,
+    terminationTimeMs: Date.now() - startTime,
+  };
+}
+
+async function killBridgeByShortId(
+  shortId: string,
+  options?: { gracePeriodMs?: number }
+): Promise<EscalationResult> {
+  const gracePeriod = options?.gracePeriodMs ?? DEFAULT_GRACE_PERIOD_MS;
+  const sigtermGrace = Math.max(Math.floor(gracePeriod / 2), 1000);
+  const startTime = Date.now();
+  
+  const meta = readBridgeMetaByShortId(shortId);
+  if (!meta) {
+    return { terminatedBy: "already_dead", terminationTimeMs: 0 };
+  }
+  
+  if (shortenSessionId(meta.sessionId) !== shortId) {
+    console.warn(`[python-repl] Binding mismatch in killBridgeByShortId: expected ${shortId}, got ${shortenSessionId(meta.sessionId)}`);
+    await deleteBridgeMetaByShortId(shortId);  // Clean up poisoned meta
+    return { terminatedBy: "already_dead", terminationTimeMs: 0 };
+  }
+  
+  if (!(await verifyProcessIdentity(meta))) {
+    await deleteBridgeMetaByShortId(shortId);
     return { terminatedBy: "already_dead", terminationTimeMs: 0 };
   }
   
   const waitForExit = (timeoutMs: number): Promise<boolean> => {
     return new Promise((resolve) => {
       const checkStart = Date.now();
-      const check = () => {
-        if (!isProcessAlive(meta.pid)) {
+      const check = async () => {
+        const stillOurs = await verifyProcessIdentity(meta);
+        if (!stillOurs) {
           resolve(true);
         } else if (Date.now() - checkStart > timeoutMs) {
           resolve(false);
@@ -603,30 +922,25 @@ async function killBridgeWithEscalation(
   
   let terminatedBy: EscalationResult["terminatedBy"] = "SIGINT";
   
-  try {
-    process.kill(meta.pid, "SIGINT");
-  } catch {}
+  killProcessGroup(meta.pid, "SIGINT");
   
   if (!(await waitForExit(gracePeriod))) {
     terminatedBy = "SIGTERM";
-    try {
-      process.kill(meta.pid, "SIGTERM");
-    } catch {}
+    killProcessGroup(meta.pid, "SIGTERM");
     
     if (!(await waitForExit(sigtermGrace))) {
       terminatedBy = "SIGKILL";
-      try {
-        process.kill(meta.pid, "SIGKILL");
-      } catch {}
+      killProcessGroup(meta.pid, "SIGKILL");
       await waitForExit(1000);
     }
   }
   
-  deleteBridgeMeta(sessionId);
+  await deleteBridgeMetaByShortId(shortId);
   
+  const sessionDir = getSessionDirByShortId(shortId);
   try {
-    if (fs.existsSync(meta.socketPath)) {
-      fs.unlinkSync(meta.socketPath);
+    if (meta.socketPath && isPathContainedIn(meta.socketPath, sessionDir, { useRealpath: true })) {
+      safeUnlinkSocket(meta.socketPath);
     }
   } catch {}
   
@@ -765,6 +1079,20 @@ export default tool({
       });
     }
 
+    // FIX-134: Use validatePathSegment for comprehensive path traversal protection
+    // Covers: .., ., /, \, null bytes, Windows reserved names, trailing dots/spaces
+    try {
+      validatePathSegment(researchSessionID, "researchSessionID");
+    } catch (e) {
+      return JSON.stringify({
+        success: false,
+        error: {
+          code: ERROR_INVALID_ACTION,
+          message: `Invalid researchSessionID: ${(e as Error).message}`,
+        },
+      });
+    }
+
     const lock = getOrCreateLock(researchSessionID);
 
     try {
@@ -864,7 +1192,7 @@ export default tool({
             const errorMsg = (e as Error).message;
             
             if (errorMsg.includes("ECONNREFUSED") || errorMsg.includes("ENOENT")) {
-              deleteBridgeMeta(researchSessionID);
+              await deleteBridgeMeta(researchSessionID);
               
               try {
                 meta = await spawnBridgeServer(researchSessionID, args.projectDir);
@@ -996,6 +1324,12 @@ export default tool({
 });
 
 /**
+ * Pattern for valid session directory names (12-char lowercase hex)
+ * Used to filter cleanup to only valid session directories, avoiding locks/ etc.
+ */
+const SESSION_DIR_PATTERN = /^[0-9a-f]{12}$/;
+
+/**
  * Cleanup function exported for use by gyoshu-hooks.ts
  * Kills all known bridge servers
  */
@@ -1006,11 +1340,14 @@ export async function cleanupAllBridges(): Promise<void> {
     return;
   }
   
-  const sessions = fs.readdirSync(runtimeDir);
+  const entries = fs.readdirSync(runtimeDir, { withFileTypes: true });
+  const validSessionDirs = entries.filter(
+    (entry) => entry.isDirectory() && SESSION_DIR_PATTERN.test(entry.name)
+  );
   
-  for (const sessionId of sessions) {
+  for (const entry of validSessionDirs) {
     try {
-      await killBridgeWithEscalation(sessionId);
+      await killBridgeByShortId(entry.name);
     } catch {
     }
   }

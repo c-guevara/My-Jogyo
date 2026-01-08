@@ -4,8 +4,8 @@ import {
   validateMLPipeline,
   runQualityGates,
   type QualityViolation,
-} from "./quality-gates";
-import { parseMarkers } from "./marker-parser";
+} from "../src/lib/quality-gates";
+import { parseMarkers } from "../src/lib/marker-parser";
 
 describe("quality-gates", () => {
   describe("validateFindings", () => {

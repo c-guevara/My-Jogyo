@@ -21,7 +21,7 @@ import {
   readLockFile,
   getCurrentProcessStartTime,
   type LockInfo,
-} from '../.opencode/lib/session-lock';
+} from '../src/lib/session-lock';
 
 // Test directory for all lock tests
 let testDir: string;
@@ -157,6 +157,21 @@ describe('SessionLock class', () => {
 
     expect(lock.getLockInfo()).toBeNull();
     expect(lock.isLocked()).toBe(false);
+  });
+
+  test.skipIf(process.platform === 'win32')('does not follow symlink lock path (FIX-149)', async () => {
+    const lockTarget = path.join(testDir, 'lock-target.lock');
+    const lockSymlink = path.join(testDir, 'lock-symlink.lock');
+
+    // Symlink points to a non-existent target. Without O_NOFOLLOW, this could create lockTarget.
+    await fs.symlink(lockTarget, lockSymlink);
+
+    const lock = new SessionLock(lockSymlink);
+
+    await expect(lock.acquire(300)).rejects.toThrow(/symlink|ELOOP/i);
+
+    const targetExists = await fs.access(lockTarget).then(() => true).catch(() => false);
+    expect(targetExists).toBe(false);
   });
 
   test('creates parent directories for lock file', async () => {

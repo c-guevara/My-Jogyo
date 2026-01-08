@@ -9,13 +9,24 @@
  */
 
 import * as fs from 'fs/promises';
+import * as fsSync from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { openNoFollow, readFileNoFollow } from './atomic-write';
+import { ensureDirSync } from './paths';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+/**
+ * Validate that a PID is a positive integer.
+ * Defense in depth against command injection via poisoned lock files.
+ */
+function isValidPid(pid: unknown): pid is number {
+  return typeof pid === 'number' && Number.isInteger(pid) && pid > 0;
+}
 
 export interface LockInfo {
   lockId: string;
@@ -62,8 +73,12 @@ export async function getProcessStartTimeLinux(pid: number): Promise<number | nu
  * Returns Unix timestamp in ms, or null if unavailable.
  */
 export async function getProcessStartTimeMacOS(pid: number): Promise<number | null> {
+  if (!isValidPid(pid)) return null;
+  
   try {
-    const { stdout } = await execAsync(`ps -p ${pid} -o lstart=`);
+    const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'lstart='], {
+      env: { ...process.env, LC_ALL: 'C' }
+    });
     const lstart = stdout.trim();
     if (!lstart) return null;
     
@@ -105,13 +120,22 @@ export async function isProcessAlive(pid: number, recordedStartTime?: number): P
     
     return true;
   } else if (process.platform === 'darwin') {
+    if (!isValidPid(pid)) return false;
+    
     try {
-      const { stdout } = await execAsync(`ps -p ${pid} -o pid=`);
+      const { stdout } = await execFileAsync('ps', ['-p', String(pid), '-o', 'pid='], {
+        env: { ...process.env, LC_ALL: 'C' }
+      });
       if (stdout.trim() === '') return false;
       
       if (recordedStartTime !== undefined) {
         const currentStartTime = await getProcessStartTimeMacOS(pid);
-        if (currentStartTime !== null && currentStartTime !== recordedStartTime) {
+        // Fail-closed: if we can't get current start time but we have a recorded one,
+        // assume PID reuse has occurred (safer than assuming same process)
+        if (currentStartTime === null) {
+          return false;
+        }
+        if (currentStartTime !== recordedStartTime) {
           return false;
         }
       }
@@ -122,7 +146,7 @@ export async function isProcessAlive(pid: number, recordedStartTime?: number): P
     }
   } else if (process.platform === 'win32') {
     try {
-      const { stdout } = await execAsync(`tasklist /FI "PID eq ${pid}" /NH`);
+      const { stdout } = await execFileAsync('tasklist', ['/FI', `PID eq ${pid}`, '/NH']);
       return !stdout.includes('No tasks');
     } catch {
       return true; // Conservative: assume alive if tasklist fails
@@ -164,33 +188,18 @@ export async function canBreakLock(lockInfo: LockInfo): Promise<boolean> {
 
 export async function readLockFile(lockPath: string): Promise<LockInfo | null> {
   try {
-    const content = await fs.readFile(lockPath, 'utf8');
+    // Security: Use O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
+    const content = await readFileNoFollow(lockPath);
     const lockInfo = JSON.parse(content) as LockInfo;
     
-    if (!lockInfo.lockId || !lockInfo.pid || !lockInfo.hostname || !lockInfo.acquiredAt) {
+    if (!lockInfo.lockId || !isValidPid(lockInfo.pid) || !lockInfo.hostname || !lockInfo.acquiredAt) {
       return null;
     }
     
     return lockInfo;
   } catch {
+    // ENOENT = doesn't exist, ELOOP = symlink rejected, or parse error
     return null;
-  }
-}
-
-async function writeLockFile(lockPath: string, lockInfo: LockInfo): Promise<void> {
-  const content = JSON.stringify(lockInfo, null, 2);
-  const tempPath = `${lockPath}.${process.pid}.tmp`;
-  
-  try {
-    await fs.mkdir(path.dirname(lockPath), { recursive: true });
-    await fs.writeFile(tempPath, content, { mode: 0o644 });
-    await fs.rename(tempPath, lockPath);
-  } finally {
-    try {
-      await fs.unlink(tempPath);
-    } catch {
-      // Temp file may already be renamed or deleted
-    }
   }
 }
 
@@ -282,11 +291,20 @@ export class SessionLock {
       const newLockInfo = await createLockInfo();
 
       try {
-        await fs.mkdir(path.dirname(this.lockPath), { recursive: true });
-        await fs.writeFile(this.lockPath, JSON.stringify(newLockInfo, null, 2), {
-          flag: 'wx',
-          mode: 0o644,
-        });
+        ensureDirSync(path.dirname(this.lockPath));
+
+        const flags =
+          fsSync.constants.O_WRONLY |
+          fsSync.constants.O_CREAT |
+          fsSync.constants.O_EXCL;
+
+        const lockFile = await openNoFollow(this.lockPath, flags, 0o600);
+        try {
+          await lockFile.writeFile(JSON.stringify(newLockInfo, null, 2), { encoding: 'utf8' });
+          await lockFile.sync();
+        } finally {
+          await lockFile.close();
+        }
       } catch (err: any) {
         if (err.code === 'EEXIST') {
           return {

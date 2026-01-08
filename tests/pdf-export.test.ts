@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "bun:test";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as os from "os";
@@ -7,7 +7,9 @@ import {
   getPreferredConverter,
   exportToPdf,
   PdfConverter,
-} from "./pdf-export";
+  CONVERTERS,
+} from "../src/lib/pdf-export";
+import { clearProjectRootCache } from "../src/lib/paths";
 
 describe("detectAvailableConverters", () => {
   it("returns array of available converters", async () => {
@@ -109,16 +111,29 @@ describe("exportToPdf", () => {
     }
   });
 
-  it("creates output directory if needed", async () => {
-    const mdPath = path.join(tempDir, "input.md");
-    const pdfPath = path.join(tempDir, "subdir", "output.pdf");
-    await fs.writeFile(mdPath, "# Test");
+  it("creates output directory inside reports directory", async () => {
+    const originalProjectRoot = process.env.GYOSHU_PROJECT_ROOT;
+    process.env.GYOSHU_PROJECT_ROOT = tempDir;
+    clearProjectRootCache();
 
-    const available = await detectAvailableConverters();
-    if (available.length > 0) {
-      await exportToPdf(mdPath, pdfPath);
-      const dirExists = await fs.stat(path.join(tempDir, "subdir")).catch(() => null);
-      expect(dirExists).not.toBeNull();
+    try {
+      const mdPath = path.join(tempDir, "input.md");
+      const pdfPath = path.join(tempDir, "reports", "subdir", "output.pdf");
+      await fs.writeFile(mdPath, "# Test");
+
+      const available = await detectAvailableConverters();
+      if (available.length > 0) {
+        await exportToPdf(mdPath, pdfPath);
+        const dirExists = await fs.stat(path.join(tempDir, "reports", "subdir")).catch(() => null);
+        expect(dirExists).not.toBeNull();
+      }
+    } finally {
+      if (originalProjectRoot !== undefined) {
+        process.env.GYOSHU_PROJECT_ROOT = originalProjectRoot;
+      } else {
+        delete process.env.GYOSHU_PROJECT_ROOT;
+      }
+      clearProjectRootCache();
     }
   });
 
@@ -289,7 +304,122 @@ describe("markdownToHtml conversion (via exportToPdf)", () => {
   });
 });
 
+describe("security", () => {
+  let tempDir: string;
+  let originalProjectRoot: string | undefined;
+
+  // Set up a sandbox where GYOSHU_PROJECT_ROOT points to our temp directory
+  // This allows us to test symlink rejection inside the "reports" directory
+  beforeAll(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "gyoshu-pdf-security-"));
+    // Save original and set temp dir as project root
+    originalProjectRoot = process.env.GYOSHU_PROJECT_ROOT;
+    process.env.GYOSHU_PROJECT_ROOT = tempDir;
+    clearProjectRootCache();
+  });
+
+  afterAll(async () => {
+    // Restore original project root
+    if (originalProjectRoot !== undefined) {
+      process.env.GYOSHU_PROJECT_ROOT = originalProjectRoot;
+    } else {
+      delete process.env.GYOSHU_PROJECT_ROOT;
+    }
+    clearProjectRootCache();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects input path that is a symlink", async () => {
+    const realMd = path.join(tempDir, "real.md");
+    const symlinkInputPath = path.join(tempDir, "symlink.md");
+
+    await fs.writeFile(realMd, "# Real Content");
+    await fs.symlink(realMd, symlinkInputPath);
+
+    const result = await exportToPdf(symlinkInputPath);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("symlink");
+  });
+
+  it("rejects output path that is a symlink (when converter available)", async () => {
+    const available = await detectAvailableConverters();
+    if (available.length === 0) {
+      console.log("SKIP: No PDF converter available - output symlink test requires converter");
+      return;
+    }
+
+    // Create the reports directory structure INSIDE our sandbox (tempDir is now project root)
+    // This ensures the output path passes containment check so we actually test symlink rejection
+    const reportsDir = path.join(tempDir, "reports", "test-report");
+    await fs.mkdir(reportsDir, { recursive: true });
+
+    const realFile = path.join(reportsDir, "real.pdf");
+    const symlinkOutputPath = path.join(reportsDir, "symlink.pdf");
+
+    await fs.writeFile(realFile, "");
+    await fs.symlink(realFile, symlinkOutputPath);
+
+    const mdPath = path.join(tempDir, "test.md");
+    await fs.writeFile(mdPath, "# Test Document\n\nSome content here.");
+
+    const result = await exportToPdf(mdPath, symlinkOutputPath);
+
+    expect(result.success).toBe(false);
+    // Now we actually test symlink rejection, not containment rejection
+    expect(result.error).toContain("symlink");
+  });
+
+  it("rejects output path outside reports directory (when converter available)", async () => {
+    const available = await detectAvailableConverters();
+    if (available.length === 0) {
+      console.log("SKIP: No PDF converter available - containment test requires converter");
+      return;
+    }
+
+    const mdPath = path.join(tempDir, "test.md");
+    await fs.writeFile(mdPath, "# Test Document\n\nContent for containment test.");
+
+    // Path outside tempDir/reports/ should be rejected by containment check
+    // and MUST NOT create any directories as a side-effect (FIX-148)
+    const outputOutsideReportsDir = path.join(tempDir, "outside", "dir", "escaped-output.pdf");
+    const result = await exportToPdf(mdPath, outputOutsideReportsDir);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("escapes reports");
+
+    const escapedDir = path.join(tempDir, "outside", "dir");
+    const escapedDirExists = await fs.stat(escapedDir).catch(() => null);
+    expect(escapedDirExists).toBeNull();
+  });
+
+  it("handles malicious HTML without crashing (sanitizer integration)", async () => {
+    // SECURITY: sanitizeHtml() is not exported, so we verify its behavior indirectly.
+    // This tests that malicious content doesn't crash the pipeline.
+    const mdPath = path.join(tempDir, "malicious.md");
+    const maliciousContent = `# Report
+
+<img src="http://evil.com/tracker.png" onerror="alert(1)">
+<a href="file:///etc/passwd">Click here</a>
+<script>alert('xss')</script>`;
+    await fs.writeFile(mdPath, maliciousContent);
+
+    const result = await exportToPdf(mdPath);
+
+    expect(result.error === undefined || typeof result.error === "string").toBe(true);
+  });
+});
+
 describe("converter buildArgs", () => {
+  it("pandoc treats input as HTML in sanitized pipeline (FIX-147)", () => {
+    const pandocConfig = CONVERTERS.find(c => c.name === "pandoc");
+    expect(pandocConfig).toBeDefined();
+    if (pandocConfig) {
+      const args = pandocConfig.buildArgs("input.html", "output.pdf", {});
+      expect(args).toContain("--from=html");
+    }
+  });
+
   it("pandoc includes pdf-engine", async () => {
     const preferred = await getPreferredConverter();
     if (preferred?.name === "pandoc") {
@@ -309,7 +439,7 @@ describe("converter buildArgs", () => {
   it("wkhtmltopdf adds page size", async () => {
     const available = await detectAvailableConverters();
     if (available.includes("wkhtmltopdf")) {
-      const { getPreferredConverter } = await import("./pdf-export");
+      const { getPreferredConverter } = await import("../src/lib/pdf-export");
       const preferred = await getPreferredConverter();
       if (preferred?.name === "wkhtmltopdf") {
         const args = preferred.buildArgs("input.html", "output.pdf", { pageSize: "a4" });
@@ -322,7 +452,7 @@ describe("converter buildArgs", () => {
   it("wkhtmltopdf adds margins", async () => {
     const available = await detectAvailableConverters();
     if (available.includes("wkhtmltopdf")) {
-      const { getPreferredConverter } = await import("./pdf-export");
+      const { getPreferredConverter } = await import("../src/lib/pdf-export");
       const preferred = await getPreferredConverter();
       if (preferred?.name === "wkhtmltopdf") {
         const args = preferred.buildArgs("input.html", "output.pdf", { margins: "2cm" });
@@ -335,13 +465,26 @@ describe("converter buildArgs", () => {
   it("weasyprint adds css path", async () => {
     const available = await detectAvailableConverters();
     if (available.includes("weasyprint")) {
-      const { getPreferredConverter } = await import("./pdf-export");
+      const { getPreferredConverter } = await import("../src/lib/pdf-export");
       const preferred = await getPreferredConverter();
       if (preferred?.name === "weasyprint") {
         const args = preferred.buildArgs("input.html", "output.pdf", { cssPath: "style.css" });
         expect(args).toContain("-s");
         expect(args).toContain("style.css");
       }
+    }
+  });
+
+  it("wkhtmltopdf includes security hardening flags (FIX-140)", () => {
+    const wkhtmlConfig = CONVERTERS.find(c => c.name === "wkhtmltopdf");
+    expect(wkhtmlConfig).toBeDefined();
+    if (wkhtmlConfig) {
+      const args = wkhtmlConfig.buildArgs("input.html", "output.pdf", {});
+      expect(args).toContain("--disable-local-file-access");
+      expect(args).toContain("--disable-external-links");
+      expect(args).toContain("--disable-javascript");
+      expect(args).toContain("--disable-plugins");
+      expect(args).toContain("--no-images");
     }
   });
 });

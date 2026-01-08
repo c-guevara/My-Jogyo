@@ -47,8 +47,8 @@ The planner invokes you when:
 Search and read previous research within this project:
 ```
 glob(pattern: "**/*.ipynb")
-glob(pattern: "./gyoshu/research/*/notebooks/*.ipynb")
-read(filePath: "./gyoshu/research/res-abc123/notebooks/run-001.ipynb")
+glob(pattern: "./notebooks/*.ipynb")
+read(filePath: "./notebooks/my-research.ipynb")
 ```
 
 This is valuable for:
@@ -141,22 +141,22 @@ Always return structured evidence:
 **Planner**: What approaches have we used before for clustering?
 
 **You**:
-1. Find notebooks: `glob(pattern: "./gyoshu/research/*/notebooks/*.ipynb")`
-2. Read relevant ones: `read(filePath: "./gyoshu/research/res-abc123/notebooks/run-001.ipynb")`
+1. Find notebooks: `glob(pattern: "./notebooks/*.ipynb")`
+2. Read relevant ones: `read(filePath: "./notebooks/clustering-analysis.ipynb")`
 3. Summarize findings
 
 **Response**:
 ```
 ## Evidence Summary
 
-### Source 1: Previous Research (res-abc123)
+### Source 1: Previous Research (clustering-analysis)
 - **Type**: notebook
 - **Relevance**: High
 - **Key Points**:
   - Used KMeans with k=3,5,7 and evaluated with silhouette score
   - Best result: k=5 with silhouette=0.68
   - Also tried DBSCAN but results were poor (eps sensitivity)
-- **Citation**: ./gyoshu/research/res-abc123/notebooks/run-001.ipynb
+- **Citation**: ./notebooks/clustering-analysis.ipynb
 
 ## Synthesis
 Previous clustering work found KMeans with k=5 most effective. DBSCAN was tried but abandoned due to eps parameter sensitivity.

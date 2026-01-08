@@ -46,6 +46,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
+import { readFileNoFollowSync } from "./atomic-write";
 
 // =============================================================================
 // CONSTANTS
@@ -90,6 +91,23 @@ const SHORT_SESSION_ID_LENGTH = 12;
  */
 const CURRENT_VERSION = "1.0.0";
 
+/**
+ * Windows reserved device names that cannot be used as file names.
+ * These names cause issues on Windows regardless of file extension.
+ * Applied unconditionally (portable-safe) to prevent cross-platform issues.
+ */
+const WINDOWS_RESERVED_NAMES = new Set([
+  // Standard reserved device names
+  'CON', 'PRN', 'AUX', 'NUL',
+  'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+  'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+  // Extended reserved names (FIX-130)
+  'CONIN$', 'CONOUT$', 'CLOCK$',
+  // Superscript digit variants (Windows treats ¹²³ as 1 2 3)
+  'COM\u00b9', 'COM\u00b2', 'COM\u00b3',
+  'LPT\u00b9', 'LPT\u00b2', 'LPT\u00b3',
+]);
+
 // =============================================================================
 // CONFIG TYPES
 // =============================================================================
@@ -128,14 +146,17 @@ export function getReportsRootDir(): string {
 }
 
 export function getNotebookPath(reportTitle: string): string {
+  validatePathSegment(reportTitle, "reportTitle");
   return path.join(getNotebookRootDir(), `${reportTitle}.ipynb`);
 }
 
 export function getReportDir(reportTitle: string): string {
+  validatePathSegment(reportTitle, "reportTitle");
   return path.join(getReportsRootDir(), reportTitle);
 }
 
 export function getReportReadmePath(reportTitle: string): string {
+  validatePathSegment(reportTitle, "reportTitle");
   return path.join(getReportDir(reportTitle), "README.md");
 }
 
@@ -156,6 +177,8 @@ export function getReportReadmePath(reportTitle: string): string {
  * // Returns: '/home/user/my-project/reports/customer-churn/checkpoints/run-001'
  */
 export function getCheckpointDir(reportTitle: string, runId: string): string {
+  validatePathSegment(reportTitle, "reportTitle");
+  validatePathSegment(runId, "runId");
   return path.join(getReportDir(reportTitle), "checkpoints", runId);
 }
 
@@ -176,12 +199,31 @@ export function getCheckpointManifestPath(
   runId: string,
   checkpointId: string
 ): string {
+  validatePathSegment(reportTitle, "reportTitle");
+  validatePathSegment(runId, "runId");
+  validatePathSegment(checkpointId, "checkpointId");
   return path.join(getCheckpointDir(reportTitle, runId), checkpointId, "checkpoint.json");
 }
 
 // =============================================================================
 // ROOT DETECTION (SYNC)
 // =============================================================================
+
+/**
+ * FIX-165: Validate that a project root path is safe to use.
+ * @param dir - Path to validate
+ * @returns true if the path is a real directory (not a symlink)
+ */
+function isValidProjectRoot(dir: string): boolean {
+  try {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory()) return false;
+    if (stat.isSymbolicLink()) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** Cached project root to avoid repeated filesystem walks */
 let cachedProjectRoot: string | null = null;
@@ -210,8 +252,9 @@ export function detectProjectRoot(): string {
   }
 
   // Strategy 1: Environment variable override
+  // FIX-165: Validate GYOSHU_PROJECT_ROOT is a real directory, not symlink
   const envRoot = process.env[ENV_PROJECT_ROOT];
-  if (envRoot && fs.existsSync(envRoot)) {
+  if (envRoot && isValidProjectRoot(envRoot)) {
     cachedProjectRoot = path.resolve(envRoot);
     return cachedProjectRoot;
   }
@@ -308,12 +351,18 @@ export function getConfigPath(): string {
 }
 
 // =============================================================================
-// RESEARCH PATH GETTERS
+// RESEARCH PATH GETTERS (LEGACY - DEPRECATED)
 // =============================================================================
 
 /**
  * Get the path to the research directory.
  * Contains all research projects.
+ *
+ * @deprecated Use `getNotebookRootDir()` and `getReportsRootDir()` instead.
+ * Legacy structure is deprecated. Use:
+ * - Notebooks: `getNotebookPath(reportTitle)` → `./notebooks/{reportTitle}.ipynb`
+ * - Reports: `getReportDir(reportTitle)` → `./reports/{reportTitle}/`
+ * This function is retained only for migration tool support.
  *
  * @returns Path to `./gyoshu/research/`
  *
@@ -327,6 +376,12 @@ export function getResearchDir(): string {
 
 /**
  * Get the path to a specific research project directory.
+ *
+ * @deprecated Use `getNotebookPath(reportTitle)` and `getReportDir(reportTitle)` instead.
+ * Legacy structure is deprecated. Use:
+ * - Notebooks: `getNotebookPath(reportTitle)` → `./notebooks/{reportTitle}.ipynb`
+ * - Reports: `getReportDir(reportTitle)` → `./reports/{reportTitle}/`
+ * This function is retained only for migration tool support.
  *
  * @param researchId - Unique identifier for the research project
  * @returns Path to `./gyoshu/research/{researchId}/`
@@ -342,6 +397,11 @@ export function getResearchPath(researchId: string): string {
 /**
  * Get the path to a specific run within a research project.
  *
+ * @deprecated Use notebook frontmatter to track runs instead.
+ * Legacy structure is deprecated. Runs are now tracked in notebook YAML frontmatter
+ * under `gyoshu.runs`. Use `getNotebookPath(reportTitle)` to access the notebook.
+ * This function is retained only for migration tool support.
+ *
  * @param researchId - Unique identifier for the research project
  * @param runId - Unique identifier for the run
  * @returns Path to `./gyoshu/research/{researchId}/runs/{runId}.json`
@@ -351,11 +411,19 @@ export function getResearchPath(researchId: string): string {
  * // Returns: '/home/user/my-project/gyoshu/research/iris-clustering-2024/runs/run-001.json'
  */
 export function getRunPath(researchId: string, runId: string): string {
+  validatePathSegment(researchId, "researchId");
+  validatePathSegment(runId, "runId");
   return path.join(getResearchPath(researchId), "runs", `${runId}.json`);
 }
 
 /**
  * Get the path to the research manifest file.
+ *
+ * @deprecated Use notebook frontmatter instead.
+ * Legacy structure is deprecated. Research metadata is now stored in notebook YAML
+ * frontmatter under the `gyoshu` key. Use `getNotebookPath(reportTitle)` to access
+ * the notebook and read/write frontmatter with the notebook-frontmatter module.
+ * This function is retained only for migration tool support.
  *
  * @param researchId - Unique identifier for the research project
  * @returns Path to `./gyoshu/research/{researchId}/research.json`
@@ -371,6 +439,11 @@ export function getResearchManifestPath(researchId: string): string {
 /**
  * Get the path to the notebooks directory for a research project.
  *
+ * @deprecated Use `getNotebookPath(reportTitle)` instead.
+ * Legacy structure is deprecated. Notebooks are now stored in a flat structure:
+ * `./notebooks/{reportTitle}.ipynb`. Use `getNotebookPath(reportTitle)` for the
+ * canonical path. This function is retained only for migration tool support.
+ *
  * @param researchId - Unique identifier for the research project
  * @returns Path to `./gyoshu/research/{researchId}/notebooks/`
  *
@@ -384,6 +457,11 @@ export function getResearchNotebooksDir(researchId: string): string {
 
 /**
  * Get the path to the artifacts directory for a research project.
+ *
+ * @deprecated Use `getReportDir(reportTitle)` instead.
+ * Legacy structure is deprecated. Artifacts are now stored in the reports directory:
+ * `./reports/{reportTitle}/`. Use `getReportDir(reportTitle)` for figures, models,
+ * exports, etc. This function is retained only for migration tool support.
  *
  * @param researchId - Unique identifier for the research project
  * @returns Path to `./gyoshu/research/{researchId}/artifacts/`
@@ -399,6 +477,26 @@ export function getResearchArtifactsDir(researchId: string): string {
 // =============================================================================
 // RUNTIME PATH GETTERS (EPHEMERAL - OS TEMP DIRECTORIES)
 // =============================================================================
+
+/**
+ * FIX-164: Validate XDG_RUNTIME_DIR security properties.
+ * On multi-user systems, XDG_RUNTIME_DIR can be poisoned if not validated.
+ * @param dir - XDG_RUNTIME_DIR path to validate
+ * @returns true if the directory is secure (exists, not symlink, owned by uid, mode 0700)
+ */
+function isSecureRuntimeDir(dir: string): boolean {
+  // FIX-169: Must be absolute path (prevents XDG_RUNTIME_DIR="." exploits)
+  if (!path.isAbsolute(dir)) return false;
+  try {
+    const stat = fs.lstatSync(dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    if (stat.uid !== process.getuid?.()) return false;
+    if ((stat.mode & 0o777) !== 0o700) return false;
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Get the path to the runtime directory.
@@ -420,15 +518,36 @@ export function getResearchArtifactsDir(researchId: string): string {
  * // Fallback: '/tmp/gyoshu/runtime'
  */
 export function getRuntimeDir(): string {
-  // Priority 1: Explicit override via environment variable
+  // FIX-182: Never throw - always fall through to platform defaults on validation failure
   const envRuntime = process.env[ENV_RUNTIME_DIR];
-  if (envRuntime) {
-    return envRuntime;
+  if (envRuntime && path.isAbsolute(envRuntime)) {
+    try {
+      const stat = fs.lstatSync(envRuntime);
+      if (stat.isDirectory() && !stat.isSymbolicLink() &&
+          stat.uid === process.getuid?.() &&
+          (stat.mode & 0o777) === 0o700) {
+        return envRuntime;
+      }
+    } catch (e: unknown) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        try {
+          ensureDirSync(envRuntime, 0o700);
+          const postStat = fs.lstatSync(envRuntime);
+          if (postStat.isDirectory() && !postStat.isSymbolicLink() &&
+              postStat.uid === process.getuid?.() &&
+              (postStat.mode & 0o777) === 0o700) {
+            return envRuntime;
+          }
+        } catch {
+        }
+      }
+    }
   }
 
   // Priority 2: XDG_RUNTIME_DIR (Linux standard, usually /run/user/{uid})
+  // FIX-164: Validate XDG_RUNTIME_DIR security properties before use
   const xdgRuntime = process.env.XDG_RUNTIME_DIR;
-  if (xdgRuntime) {
+  if (xdgRuntime && isSecureRuntimeDir(xdgRuntime)) {
     return path.join(xdgRuntime, "gyoshu");
   }
 
@@ -456,13 +575,15 @@ export function getRuntimeDir(): string {
  * - Linux: 108 bytes
  * - macOS: 104 bytes
  *
+ * SECURITY: Always hashes the input, even for short IDs.
+ * This prevents path traversal attacks via malicious short IDs like ".." or "../x".
+ *
  * @param sessionId - Original session identifier (can be any length)
  * @returns Short identifier (12 hex chars) suitable for socket paths
  */
 export function shortenSessionId(sessionId: string): string {
-  if (sessionId.length <= SHORT_SESSION_ID_LENGTH) {
-    return sessionId;
-  }
+  // SECURITY: Always hash - do not return raw input even for short IDs
+  // This prevents traversal attacks like "../.." which is only 5 chars
   return crypto
     .createHash("sha256")
     .update(sessionId)
@@ -487,6 +608,28 @@ export function clearRuntimeDirCache(): void {
  */
 export function getSessionDir(sessionId: string): string {
   const shortId = shortenSessionId(sessionId);
+  return path.join(getRuntimeDir(), shortId);
+}
+
+/**
+ * Get session directory path from an already-shortened session ID.
+ * Use this when you already have the 12-char hash (e.g., from readdirSync on runtime dir).
+ *
+ * SECURITY NOTE: This function does NOT hash the input - it must already be a valid
+ * 12-char hex short ID. Use getSessionDir() for untrusted/original session IDs.
+ *
+ * @param shortId - Already-shortened 12-char hex session identifier (from directory name)
+ * @returns Path to runtime/{shortId}/ in OS temp directory
+ *
+ * @example
+ * // When iterating runtime directories (names are already hashed):
+ * const shortIds = fs.readdirSync(getRuntimeDir());
+ * for (const shortId of shortIds) {
+ *   const sessionDir = getSessionDirByShortId(shortId);
+ *   // ...
+ * }
+ */
+export function getSessionDirByShortId(shortId: string): string {
   return path.join(getRuntimeDir(), shortId);
 }
 
@@ -669,12 +812,16 @@ export function getLegacyArtifactsDir(sessionId: string): string {
 export function getConfig(): GyoshuConfig | null {
   const configPath = getConfigPath();
   try {
-    if (!fs.existsSync(configPath)) {
+    // Security: Use O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
+    const content = readFileNoFollowSync(configPath);
+    return JSON.parse(content) as GyoshuConfig;
+  } catch (err) {
+    // ENOENT = doesn't exist, ELOOP = symlink rejected by O_NOFOLLOW
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ELOOP") {
       return null;
     }
-    const content = fs.readFileSync(configPath, "utf-8");
-    return JSON.parse(content) as GyoshuConfig;
-  } catch {
+    // Other errors (parse errors, permission issues) - return null for robustness
     return null;
   }
 }
@@ -713,7 +860,7 @@ export function ensureGyoshuInitialized(projectName?: string): GyoshuConfig {
   ensureDirSync(gyoshuRoot);
 
   const config = createDefaultConfig(projectName);
-  fs.writeFileSync(configPath, JSON.stringify(config, null, 2), "utf-8");
+  atomicWriteSync(configPath, JSON.stringify(config, null, 2));
 
   return config;
 }
@@ -723,14 +870,91 @@ export function ensureGyoshuInitialized(projectName?: string): GyoshuConfig {
 // =============================================================================
 
 /**
+ * Synchronous atomic write - writes to temp file then renames.
+ * Security: Does not follow symlinks (rename replaces symlinks).
+ *
+ * @param targetPath - Path to the target file
+ * @param data - String data to write
+ * @param mode - File permissions (default: 0o600)
+ */
+function atomicWriteSync(
+  targetPath: string,
+  data: string,
+  mode: number = 0o600
+): void {
+  const dir = path.dirname(targetPath);
+  const base = path.basename(targetPath);
+  const tempPath = path.join(dir, `.${base}.tmp.${process.pid}`);
+
+  try {
+    // Use 'wx' for exclusive creation (won't follow symlinks)
+    fs.writeFileSync(tempPath, data, { flag: "wx", mode });
+    fs.renameSync(tempPath, targetPath);
+  } finally {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {
+      // Temp file may already be renamed
+    }
+  }
+}
+
+/**
  * Ensure a directory exists, creating it if necessary.
  * Uses synchronous operations for simplicity in path setup.
+ * 
+ * Security: Creates directories with mode 0700 (owner-only access) by default.
+ * This is important for runtime directories containing sockets and session data.
+ * 
+ * Security: Creates directories one segment at a time, verifying each after creation.
+ * This prevents TOCTOU race conditions where an attacker creates a symlink at an
+ * intermediate path between a check and mkdir. Each segment is lstat-verified
+ * immediately after creation to detect race condition attacks.
  *
  * @param dirPath - Path to the directory to ensure
+ * @param mode - Optional permissions mode (default: 0o700)
+ * @throws Error if any path component is a symlink or race condition detected
  */
-export function ensureDirSync(dirPath: string): void {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
+export function ensureDirSync(dirPath: string, mode: number = 0o700): void {
+  const resolved = path.resolve(dirPath);
+  const parts = resolved.split(path.sep).filter(Boolean);
+  
+  // Build path segment by segment
+  let currentPath = resolved.startsWith(path.sep) ? path.sep : '';
+  
+  for (const part of parts) {
+    currentPath = path.join(currentPath, part);
+    
+    try {
+      const stat = fs.lstatSync(currentPath);
+      
+      // If exists, verify it's a directory (not symlink)
+      if (stat.isSymbolicLink()) {
+        throw new Error(`Security: path component ${currentPath} is a symlink`);
+      }
+      if (!stat.isDirectory()) {
+        throw new Error(`Security: path component ${currentPath} is not a directory`);
+      }
+      // Exists and is a real directory - continue to next segment
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        // Doesn't exist - create it (no recursive flag!)
+        fs.mkdirSync(currentPath, { mode });
+        
+        // Immediately verify what we created (defense against race)
+        const createdStat = fs.lstatSync(currentPath);
+        if (createdStat.isSymbolicLink()) {
+          try { fs.rmdirSync(currentPath); } catch {}
+          throw new Error(`Security: race detected - ${currentPath} became a symlink`);
+        }
+        if (!createdStat.isDirectory()) {
+          try { fs.unlinkSync(currentPath); } catch {}
+          throw new Error(`Security: race detected - ${currentPath} is not a directory`);
+        }
+      } else {
+        throw err; // Re-throw other errors (including security errors)
+      }
+    }
   }
 }
 
@@ -783,7 +1007,8 @@ export function validatePathSegment(segment: string, name: string): void {
   const normalized = segment.normalize("NFC");
 
   // Prevent path traversal attacks
-  if (normalized.includes("..") || normalized.includes("/") || normalized.includes("\\")) {
+  // Block both ".." (parent directory) and "." (current directory collapse)
+  if (normalized === "." || normalized.includes("..") || normalized.includes("/") || normalized.includes("\\")) {
     throw new Error(`Invalid ${name}: contains path traversal characters`);
   }
 
@@ -795,5 +1020,19 @@ export function validatePathSegment(segment: string, name: string): void {
   // Limit byte length (filesystems typically limit to 255 bytes, not chars)
   if (Buffer.byteLength(normalized, "utf8") > 255) {
     throw new Error(`Invalid ${name}: exceeds maximum length of 255 bytes`);
+  }
+
+  // Reject Windows reserved device names (portable-safe)
+  // Also handle COM1.txt, NUL.txt etc (anything starting with reserved name + optional extension)
+  // FIX-135: Trim trailing spaces/dots from baseName to prevent bypass via "CON .txt" or "NUL..txt"
+  const upperSegment = normalized.toUpperCase();
+  const baseName = upperSegment.split('.')[0].replace(/[ .]+$/u, "");
+  if (WINDOWS_RESERVED_NAMES.has(baseName)) {
+    throw new Error(`${name} contains Windows reserved name: ${segment}`);
+  }
+
+  // Reject trailing dots or spaces (Windows path confusion)
+  if (normalized.endsWith('.') || normalized.endsWith(' ')) {
+    throw new Error(`${name} has trailing dot or space: ${segment}`);
   }
 }

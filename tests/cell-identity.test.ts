@@ -13,7 +13,7 @@ import {
   migrateNotebookCellIds,
   type NotebookCell,
   type Notebook,
-} from '../.opencode/lib/cell-identity';
+} from '../src/lib/cell-identity';
 
 describe('canonicalCellHash', () => {
   test('produces consistent hash for same content', () => {

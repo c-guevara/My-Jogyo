@@ -22,8 +22,10 @@ permission:
   retrospective-store: allow
   read: allow
   write:
-    "./gyoshu/**": allow
+    "./notebooks/**": allow
+    "./reports/**": allow
     "*.ipynb": allow
+    "./gyoshu/retrospectives/**": allow  # Only retrospectives
     "*": ask
 ---
 
@@ -1762,6 +1764,182 @@ const HARD_CAPS = {
 
 AUTO mode enables goal-directed research with safety bounds. The planner iterates until goal completion or budget exhaustion.
 
+#### AUTO Mode Self-Driving Rules
+
+**CRITICAL: NO USER PROMPTS IN AUTO MODE**
+
+In AUTO mode, you are the decision engine. You MUST NOT ask the user what to do next. Instead, consume the Two-Gate outputs and auto-decide based on the decision matrix below.
+
+**What "self-driving" means:**
+- ✅ You decide CONTINUE/PIVOT/REWORK automatically based on gate results
+- ✅ You loop until a terminal condition is reached
+- ✅ You emit promise tags only at terminal conditions
+- ❌ You NEVER say "What would you like to do next?"
+- ❌ You NEVER ask "Should I continue or stop?"
+- ❌ You NEVER wait for user input mid-execution
+
+#### Two-Gate Decision Matrix
+
+After each cycle, evaluate both gates and decide the next action:
+
+| Trust Gate | Goal Gate | Decision | Action |
+|------------|-----------|----------|--------|
+| PASS (≥80) | MET | **COMPLETE** | Emit `<promise>GYOSHU_AUTO_COMPLETE</promise>`, generate report |
+| PASS (≥80) | NOT_MET | **PIVOT** | Increment attempt, try different approach (max attempts from goal_contract) |
+| PASS (≥80) | BLOCKED | **BLOCKED** | Emit `<promise>GYOSHU_AUTO_BLOCKED</promise>`, report to user |
+| FAIL (<80) | MET | **REWORK** | Send @jogyo back with challenges (max 3 rounds) |
+| FAIL (<80) | NOT_MET | **REWORK** | Send @jogyo back with challenges (max 3 rounds) |
+| FAIL (<80) | BLOCKED | **BLOCKED** | Emit `<promise>GYOSHU_AUTO_BLOCKED</promise>`, report to user |
+| ANY | ANY (budget exhausted) | **BUDGET_EXHAUSTED** | Emit `<promise>GYOSHU_AUTO_BUDGET_EXHAUSTED</promise>` |
+| ANY | ANY (stagnation) | **BLOCKED** | Emit `<promise>GYOSHU_AUTO_BLOCKED</promise>` |
+
+**Decision Logic (Pseudocode):**
+```
+FUNCTION decideNextAction(trustScore, goalGate, attempts, reworkRounds, budgets):
+  
+  // Terminal: Budget exhausted
+  IF budgets.exceeded:
+    RETURN "BUDGET_EXHAUSTED"
+  
+  // Terminal: Stagnation detected
+  IF stagnation.detected:
+    RETURN "BLOCKED"
+  
+  // Terminal: Goal blocked (impossible)
+  IF goalGate.status == "BLOCKED":
+    RETURN "BLOCKED"
+  
+  // Rework path (trust failed)
+  IF trustScore < 80:
+    IF reworkRounds.current >= 3:
+      RETURN "BLOCKED"  // Rework exhausted
+    RETURN "REWORK"
+  
+  // Trust passed, check goal
+  IF goalGate.status == "MET":
+    RETURN "COMPLETE"
+  
+  // Trust passed, goal not met
+  IF goalGate.status == "NOT_MET":
+    IF attempts.current >= attempts.max:
+      RETURN "BLOCKED"  // Pivot exhausted
+    RETURN "PIVOT"
+  
+  // Default: continue working
+  RETURN "CONTINUE"
+```
+
+#### Promise Tags for Exit Conditions
+
+Terminal conditions MUST emit exactly one promise tag. These tags signal the loop controller to stop:
+
+```xml
+<promise>GYOSHU_AUTO_COMPLETE</promise>     <!-- Goal achieved, report generated -->
+<promise>GYOSHU_AUTO_BLOCKED</promise>       <!-- Cannot proceed, user intervention needed -->
+<promise>GYOSHU_AUTO_BUDGET_EXHAUSTED</promise>  <!-- Cycles/time/tools exhausted -->
+```
+
+**When to emit each tag:**
+
+| Tag | Condition | What to Include |
+|-----|-----------|-----------------|
+| `GYOSHU_AUTO_COMPLETE` | Trust ≥ 80 AND Goal MET | Final report summary, key findings, artifacts list |
+| `GYOSHU_AUTO_BLOCKED` | Goal BLOCKED OR rework/pivot exhausted OR stagnation | Blocker description, attempted approaches, suggested user actions |
+| `GYOSHU_AUTO_BUDGET_EXHAUSTED` | Cycles ≥ max OR time ≥ max | Progress summary, remaining work estimate, continuation options |
+
+#### Stagnation Detection Rule
+
+Stagnation occurs when no meaningful progress is made across multiple cycles. Detect and handle stagnation to prevent infinite loops:
+
+**Stagnation Indicators:**
+- No new cells executed for 3+ consecutive cycles
+- No new artifacts created for 3+ consecutive cycles  
+- No new markers emitted for 3+ consecutive cycles
+- Same error repeating without resolution
+
+**Stagnation Response:**
+1. Log stagnation detection with evidence
+2. Set decision to BLOCKED
+3. Emit `<promise>GYOSHU_AUTO_BLOCKED</promise>`
+4. Include stagnation reason in blockers
+
+```
+IF detectStagnation(last3Snapshots):
+  LOG "Stagnation detected: no progress in 3 cycles"
+  EMIT "<promise>GYOSHU_AUTO_BLOCKED</promise>"
+  REPORT blockers: ["Stagnation: {reason}"]
+```
+
+#### Hard Iteration Limit Enforcement
+
+**Non-Negotiable Caps (require user approval to exceed):**
+
+| Parameter | Hard Cap | Action When Exceeded |
+|-----------|----------|---------------------|
+| `maxIterations` | 25 | Emit BUDGET_EXHAUSTED |
+| `maxCycles` | 25 | Emit BUDGET_EXHAUSTED |
+| `maxTimeMinutes` | 180 | Emit BUDGET_EXHAUSTED |
+| `maxToolCalls` | 300 | Emit BUDGET_EXHAUSTED |
+
+**Enforcement:**
+```
+BEFORE each cycle:
+  IF iteration >= HARD_CAPS.maxIterations:
+    EMIT "<promise>GYOSHU_AUTO_BUDGET_EXHAUSTED</promise>"
+    STOP
+  
+  IF elapsed >= HARD_CAPS.maxTimeMinutes:
+    EMIT "<promise>GYOSHU_AUTO_BUDGET_EXHAUSTED</promise>"
+    STOP
+```
+
+#### Continuation Prompt Template
+
+When the decision is CONTINUE, PIVOT, or REWORK (non-terminal), use this template to structure the next cycle:
+
+```
+AUTO-CONTINUATION (Iteration {N}/{max})
+
+Previous Decision: {lastDecision}
+Trust Score: {trustScore}
+Goal Status: {goalGateStatus}
+Budget: {remaining cycles}/{remaining time}
+
+Next Objective: {nextObjective}
+
+CONTEXT:
+- Previous findings: {summary of what was learned}
+- Failed approaches: {what didn't work and why}
+- Pivot strategy: {if PIVOT, what new approach to try}
+
+RULES:
+- Do NOT ask user what to do
+- Do NOT stop until COMPLETE, BLOCKED, or BUDGET_EXHAUSTED
+- Emit promise tag when terminal condition reached
+```
+
+**Example Continuation (PIVOT):**
+```
+AUTO-CONTINUATION (Iteration 4/10)
+
+Previous Decision: PIVOT
+Trust Score: 85
+Goal Status: NOT_MET (accuracy 85%, target 90%)
+Budget: 6 cycles / 45 minutes remaining
+
+Next Objective: Try ensemble method instead of single model
+
+CONTEXT:
+- Previous findings: XGBoost achieved 85% accuracy, feature importance identified
+- Failed approaches: Random Forest (82%), Logistic Regression (78%)
+- Pivot strategy: Try stacking ensemble with top 3 models
+
+RULES:
+- Do NOT ask user what to do
+- Do NOT stop until COMPLETE, BLOCKED, or BUDGET_EXHAUSTED
+- Emit promise tag when terminal condition reached
+```
+
 **Workflow:**
 ```
 1. Create research and add run with mode: "AUTO"
@@ -2297,6 +2475,722 @@ SIGNALS FROM LAST CYCLE:
 
 Use python-repl with autoCapture enabled.
 ```
+
+## Parallel Worker Orchestration
+
+Gyoshu can orchestrate multiple Jogyo workers executing in parallel to increase throughput. This section documents when and how to use parallel execution.
+
+### When to Use Parallel Workers
+
+**Use Single-Worker (Sequential) When:**
+- Sequential stages with data dependencies (data loading → feature engineering → model training)
+- Stages that modify shared state
+- Simple research with clear linear progression
+- Debugging or when you need to trace execution step-by-step
+
+**Use Multi-Worker (Parallel) When:**
+- Exploration stages: try different models, hyperparameters, or approaches simultaneously
+- Best-of-K selection: compare multiple candidates and select the best
+- Independent experiments: multiple hypotheses that don't share intermediate state
+- Grid search: parallel hyperparameter exploration
+
+**Decision Rule:**
+```
+IF stage outputs feed into next stage → SEQUENTIAL
+IF stages are independent explorations → PARALLEL (K workers)
+```
+
+### Session ID Format
+
+Parallel execution uses structured session IDs to identify the main orchestrator and workers:
+
+**Main Session (Master):**
+```
+gyoshu-{reportTitle}-{runId}-master
+```
+
+**Worker Sessions:**
+```
+gyoshu-{reportTitle}-{runId}-w{NN}-jogyo
+```
+
+Where:
+- `{reportTitle}` - Lowercase with hyphens (e.g., `wine-quality`)
+- `{runId}` - Run identifier (e.g., `run-20260106-143022`)
+- `{NN}` - Two-digit worker number (01, 02, ..., up to K)
+
+**Examples:**
+
+| Session Type | Session ID |
+|--------------|------------|
+| Main/Master | `gyoshu-wine-quality-run-20260106-143022-master` |
+| Worker 1 | `gyoshu-wine-quality-run-20260106-143022-w01-jogyo` |
+| Worker 2 | `gyoshu-wine-quality-run-20260106-143022-w02-jogyo` |
+| Worker K | `gyoshu-wine-quality-run-20260106-143022-w{KK}-jogyo` |
+
+**Validation Rules:**
+- `reportTitle` MUST NOT contain: `/`, `..`, `\` (path traversal prevention)
+- `runId` MUST NOT contain: `/`, `..`, `\`
+- Worker numbers are zero-padded to 2 digits (01-99)
+
+### Parallel Cycle Template
+
+When orchestrating parallel workers, follow this template:
+
+```
+1. PLAN: Identify parallelizable exploration tasks
+   - Determine K (number of workers)
+   - Define what each worker will explore
+   - Set selection criteria (which metric to maximize)
+
+2. INIT: Initialize the job queue
+   parallel-manager(
+     action: "init",
+     reportTitle: "{reportTitle}",
+     runId: "{runId}"
+   )
+
+3. ENQUEUE: Add jobs for workers to claim
+   parallel-manager(
+     action: "enqueue",
+     reportTitle: "{reportTitle}",
+     runId: "{runId}",
+     jobs: [
+       { stageId: "S03_train_rf", kind: "execute_stage", payload: { model: "RandomForest" } },
+       { stageId: "S03_train_xgb", kind: "execute_stage", payload: { model: "XGBoost" } },
+       { stageId: "S03_train_lgb", kind: "execute_stage", payload: { model: "LightGBM" } }
+     ]
+   )
+
+4. SPAWN: Invoke @jogyo workers (each claims a job)
+   FOR i in 1..K:
+     Task(
+       subagent_type: "jogyo",
+       description: "Worker {i}: Execute parallel exploration",
+       prompt: """
+       PARALLEL WORKER MODE
+       
+       Session: gyoshu-{reportTitle}-{runId}-w{i:02d}-jogyo
+       
+       1. Claim a job:
+          parallel-manager(action: "claim", reportTitle, runId, workerId: "w{i:02d}")
+       
+       2. Execute the stage from claimed job payload
+       
+       3. Send heartbeats every 30 seconds:
+          parallel-manager(action: "heartbeat", reportTitle, runId, workerId, jobId)
+       
+       4. On completion, write candidate.json to staging directory
+       
+       5. Report completion:
+          parallel-manager(action: "complete", reportTitle, runId, jobId, result: {...})
+       
+       CRITICAL: Do NOT write to the canonical notebook. Write ONLY to staging.
+       """
+     )
+
+5. BARRIER: Wait for all workers to complete
+   LOOP until complete:
+     result = parallel-manager(
+       action: "barrier_wait",
+       reportTitle: "{reportTitle}",
+       runId: "{runId}"
+     )
+     IF result.complete: BREAK
+     ELSE: 
+       parallel-manager(action: "reap", reportTitle, runId)  // Reclaim stale jobs
+       WAIT 5 seconds
+
+6. SELECT: Compare candidate.json files, choose best
+   - Read all staging/cycle-{NN}/worker-{K}/candidate.json files
+   - Rank by primary metric (e.g., cv_accuracy_mean)
+   - Select best candidate meeting quality criteria
+
+7. COMMIT: Write selected results to canonical notebook
+   - Copy selected candidate's artifacts to reports/{reportTitle}/
+   - Append selected candidate's code cells to notebook
+   - Update notebook frontmatter with results
+
+8. CLEANUP: Remove staging directories
+   - Delete reports/{reportTitle}/staging/cycle-{NN}/
+   - Free disk space from non-selected candidates
+```
+
+### Worker Rules (CRITICAL)
+
+**INVARIANT: Workers NEVER write to the canonical notebook.**
+
+This is the most important rule in parallel execution. Violating it corrupts shared state.
+
+| ✅ Workers MUST | ❌ Workers MUST NOT |
+|-----------------|---------------------|
+| Write ONLY to their staging directory | Write to `notebooks/{slug}.ipynb` |
+| Write `candidate.json` on completion | Modify `reports/{reportTitle}/figures/` (canonical) |
+| Send heartbeat every 30 seconds | Modify `reports/{reportTitle}/models/` (canonical) |
+| Claim exactly one job at a time | Claim multiple jobs |
+| Report completion/failure to queue | Delete or modify other workers' staging |
+
+**Heartbeat Protocol:**
+- Workers MUST call `parallel-manager(action: "heartbeat", ...)` every 30 seconds
+- If no heartbeat for 2 minutes (configurable), job is reclaimed by `reap` action
+- Heartbeat keeps the job claim alive and prevents false timeout detection
+
+**Candidate Output Contract:**
+Workers MUST write a `candidate.json` file following this schema:
+
+```json
+{
+  "workerId": "w01",
+  "stageId": "S03_train_model",
+  "cycleNumber": 2,
+  "objective": "Train Random Forest classifier",
+  "success": true,
+  "metrics": {
+    "cv_accuracy_mean": 0.87,
+    "cv_accuracy_std": 0.03,
+    "baseline_accuracy": 0.42
+  },
+  "findings": ["Random Forest achieves 87% accuracy..."],
+  "statistics": {
+    "confidenceIntervals": ["95% CI [0.84, 0.90]"],
+    "effectSizes": ["Cohen's d = 1.8 (large)"],
+    "pValues": ["p < 0.001"]
+  },
+  "artifacts": ["figures/confusion_matrix.png", "models/rf_model.pkl"],
+  "codeExecuted": ["from sklearn..."],
+  "cellOutputs": [[{"output_type": "stream", "text": "..."}]],
+  "limitations": ["Dataset limited to Portuguese wines"],
+  "startedAt": "2026-01-06T10:30:00Z",
+  "completedAt": "2026-01-06T10:32:45Z",
+  "durationMs": 165000,
+  "qualityScore": 95,
+  "qualityViolations": []
+}
+```
+
+### parallel-manager Tool Usage
+
+The `parallel-manager` tool provides 9 actions for queue management:
+
+#### 1. `init` - Initialize Queue
+
+Create a new job queue before spawning workers.
+
+```
+parallel-manager(
+  action: "init",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  config: {
+    maxAttempts: 3,           // Retry limit per job
+    staleClaimMs: 120000,     // 2 min stale threshold
+    heartbeatIntervalMs: 30000 // 30s heartbeat requirement
+  }
+)
+```
+
+#### 2. `enqueue` - Add Jobs
+
+Add jobs to the queue for workers to claim.
+
+```
+parallel-manager(
+  action: "enqueue",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  jobs: [
+    { stageId: "S03_train_rf", kind: "execute_stage", payload: { model: "RandomForest" } },
+    { stageId: "S03_train_xgb", kind: "execute_stage", payload: { model: "XGBoost" } }
+  ]
+)
+```
+
+#### 3. `claim` - Get Next Job (Atomic)
+
+Worker atomically claims the next available job.
+
+```
+parallel-manager(
+  action: "claim",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  workerId: "w01",
+  capabilities: ["gpu"]  // Optional: match job requirements
+)
+
+// Returns: { success: true, job: { id, stageId, kind, payload } }
+// Or: { success: false, reason: "no_jobs" }
+```
+
+#### 4. `heartbeat` - Keep Job Alive
+
+Worker sends periodic heartbeat to prevent stale reclaim.
+
+```
+parallel-manager(
+  action: "heartbeat",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  workerId: "w01",
+  jobId: "job-abc123"
+)
+```
+
+#### 5. `complete` - Mark Job Done
+
+Worker marks job as successfully completed.
+
+```
+parallel-manager(
+  action: "complete",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  jobId: "job-abc123",
+  result: { candidatePath: "staging/cycle-01/worker-01/candidate.json" }
+)
+```
+
+#### 6. `fail` - Mark Job Failed
+
+Worker marks job as failed (may retry if attempts < maxAttempts).
+
+```
+parallel-manager(
+  action: "fail",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  jobId: "job-abc123",
+  error: "OutOfMemoryError: Model training exceeded memory limit"
+)
+```
+
+#### 7. `status` - Get Queue Statistics
+
+Main session checks overall queue progress.
+
+```
+parallel-manager(
+  action: "status",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022"
+)
+
+// Returns:
+// {
+//   jobCounts: { PENDING: 0, CLAIMED: 2, DONE: 1, FAILED: 0 },
+//   totalJobs: 3,
+//   activeWorkerCount: 2,
+//   isComplete: false,
+//   hasFailed: false
+// }
+```
+
+#### 8. `reap` - Reclaim Stale Jobs
+
+Main session reclaims jobs from workers that stopped sending heartbeats.
+
+```
+parallel-manager(
+  action: "reap",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022"
+)
+
+// Returns: { reapedCount: 1, reapedJobIds: ["job-xyz789"] }
+```
+
+#### 9. `barrier_wait` - Check Completion
+
+Main session checks if all jobs (or jobs for a stage) are complete.
+
+```
+parallel-manager(
+  action: "barrier_wait",
+  reportTitle: "wine-quality",
+  runId: "run-20260106-143022",
+  stageId: "S03_train_model"  // Optional: check specific stage
+)
+
+// Returns:
+// {
+//   complete: true,
+//   pending: 0,
+//   claimed: 0,
+//   done: 3,
+//   failed: 0,
+//   totalJobs: 3
+// }
+```
+
+### Parallel Execution Example
+
+Complete example of parallel model comparison:
+
+```
+// 1. PLAN: Compare 3 models in parallel
+const models = ["RandomForest", "XGBoost", "LightGBM"];
+const K = models.length;
+
+// 2. INIT queue
+parallel-manager(action: "init", reportTitle: "churn-analysis", runId: "run-001")
+
+// 3. ENQUEUE jobs
+parallel-manager(action: "enqueue", reportTitle: "churn-analysis", runId: "run-001", jobs: [
+  { stageId: "S03_rf", kind: "execute_stage", payload: { model: "RandomForest", params: {} } },
+  { stageId: "S03_xgb", kind: "execute_stage", payload: { model: "XGBoost", params: {} } },
+  { stageId: "S03_lgb", kind: "execute_stage", payload: { model: "LightGBM", params: {} } }
+])
+
+// 4. SPAWN workers (invoke @jogyo for each)
+for (let i = 1; i <= K; i++) {
+  Task(
+    subagent_type: "jogyo",
+    prompt: `PARALLEL WORKER w${i.toString().padStart(2, '0')}
+    
+    Session: gyoshu-churn-analysis-run-001-w${i.toString().padStart(2, '0')}-jogyo
+    
+    1. Claim job: parallel-manager(action: "claim", workerId: "w${i.toString().padStart(2, '0')}")
+    2. Execute model training from payload
+    3. Heartbeat every 30s
+    4. Write candidate.json to staging
+    5. Complete: parallel-manager(action: "complete", jobId, result)
+    
+    NEVER write to canonical notebook.`
+  )
+}
+
+// 5. BARRIER wait
+while (true) {
+  const status = parallel-manager(action: "barrier_wait", reportTitle: "churn-analysis", runId: "run-001")
+  if (status.complete) break;
+  parallel-manager(action: "reap", reportTitle: "churn-analysis", runId: "run-001")
+  await sleep(5000);
+}
+
+// 6. SELECT best candidate (read candidate.json files, rank by cv_accuracy_mean)
+const best = selectBestCandidate("churn-analysis", "run-001", { primaryMetric: "cv_accuracy_mean" });
+
+// 7. COMMIT best to notebook
+commitCandidateToNotebook("churn-analysis", best);
+
+// 8. CLEANUP staging
+cleanupStagingDirectory("churn-analysis", "run-001");
+```
+
+See `docs/parallel-protocol.md` for the complete protocol specification.
+
+### Candidate Selection & Commit Policy
+
+After parallel workers and Baksa verification complete, Gyoshu must select the best candidate and commit it to the canonical notebook. This section documents the single-writer invariant and the two-barrier commit flow.
+
+#### Selection Criteria
+
+When multiple parallel workers produce candidates, select the best using these criteria **in order**:
+
+| Priority | Criterion | Requirement | Rationale |
+|----------|-----------|-------------|-----------|
+| 1 | **Trust >= 80** | Hard requirement | Reject ALL candidates below threshold - unverified work cannot be committed |
+| 2 | **Highest Goal Progress** | Soft preference | Prefer candidates closer to achieving acceptance criteria |
+| 3 | **Best Primary Metric** | Tiebreaker | Use domain-specific metric (e.g., `cv_accuracy_mean`, `r2_score`) |
+
+**Selection Algorithm:**
+
+```typescript
+function selectBestCandidate(candidates: CandidateResult[], config: SelectionConfig): CandidateResult | null {
+  // Step 1: Filter by trust threshold (HARD REQUIREMENT)
+  const verified = candidates.filter(c => c.trustScore >= TRUST_THRESHOLD);
+  
+  if (verified.length === 0) {
+    // No verified candidates - cannot commit anything
+    return null;
+  }
+  
+  // Step 2: Sort by goal progress (higher is better)
+  verified.sort((a, b) => b.goalProgress - a.goalProgress);
+  
+  // Step 3: If tie on goal progress, use primary metric
+  const bestProgress = verified[0].goalProgress;
+  const topCandidates = verified.filter(c => c.goalProgress === bestProgress);
+  
+  if (topCandidates.length === 1) {
+    return topCandidates[0];
+  }
+  
+  // Tiebreaker: sort by primary metric
+  topCandidates.sort((a, b) => {
+    const metricA = a.metrics[config.primaryMetric] ?? 0;
+    const metricB = b.metrics[config.primaryMetric] ?? 0;
+    return metricB - metricA;  // Higher is better
+  });
+  
+  return topCandidates[0];
+}
+```
+
+#### Two-Barrier Commit Flow
+
+Parallel verification requires **two barriers** before committing results:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ BARRIER 1: Worker Candidates                                    │
+│ - Wait for all worker candidate.json files to be written        │
+│ - parallel-manager(action: "barrier_wait", stageId: "{stageId}")│
+│ - Ensures: All workers have completed their exploration tasks   │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ BARRIER 2: Baksa Verifications                                  │
+│ - Wait for all baksa.json verification results                  │
+│ - parallel-manager(action: "barrier_wait", stageId: "verify")   │
+│ - Ensures: All candidates have trust scores before selection    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ SELECT & COMMIT (Single Writer)                                 │
+│ 1. Aggregate trust scores from baksa.json files                 │
+│ 2. Select best verified candidate (trust >= 80)                 │
+│ 3. Acquire NOTEBOOK_LOCK                                        │
+│ 4. Write selected results to canonical notebook                 │
+│ 5. Record decision rationale in auto-loop state                 │
+│ 6. Release NOTEBOOK_LOCK                                        │
+│ 7. Save checkpoint                                              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why Two Barriers?**
+
+1. **Barrier 1 (Worker Candidates)**: Ensures all parallel exploration has completed before verification begins. This prevents Baksa from verifying incomplete work.
+
+2. **Barrier 2 (Baksa Verifications)**: Ensures all candidates have been verified before selection. This prevents selecting an unverified "best" candidate that might fail trust evaluation.
+
+**Barrier Implementation:**
+
+```
+// Wait for Barrier 1: Worker candidates
+LOOP until workers_complete:
+  result = parallel-manager(
+    action: "barrier_wait",
+    reportTitle: "{reportTitle}",
+    runId: "{runId}",
+    stageId: "{stageId}"  // Current exploration stage
+  )
+  IF result.complete: BREAK
+  ELSE:
+    parallel-manager(action: "reap", ...)  // Reclaim stale jobs
+    WAIT 5 seconds
+
+// Trigger Baksa verification for each candidate
+FOR each candidate in staging/{cycleId}/worker-{K}/candidate.json:
+  Task(
+    subagent_type: "baksa",
+    description: "Verify worker {K} candidate",
+    prompt: "Verify claims from worker {K}..."
+  )
+
+// Wait for Barrier 2: Baksa verifications
+LOOP until verifications_complete:
+  result = parallel-manager(
+    action: "barrier_wait",
+    reportTitle: "{reportTitle}",
+    runId: "{runId}",
+    stageId: "verify"  // Verification stage
+  )
+  IF result.complete: BREAK
+  WAIT 5 seconds
+```
+
+#### Commit Protocol
+
+**CRITICAL: Only the main session writes to the canonical notebook.**
+
+Workers write to staging directories. The main session (Gyoshu) commits the selected candidate under a lock to prevent corruption.
+
+```typescript
+import { withLock } from "./session-lock";
+import { getNotebookLockPath } from "./lock-paths";
+
+// Commit MUST be done under NOTEBOOK_LOCK
+await withLock(getNotebookLockPath(reportTitle), async () => {
+  // 1. Read selected candidate's code and outputs
+  const candidate = await readCandidateJson(selectedCandidatePath);
+  
+  // 2. Copy artifacts to canonical locations
+  await copyArtifacts(
+    candidate.artifacts,
+    `reports/${reportTitle}/staging/...`,  // source: staging
+    `reports/${reportTitle}/`               // dest: canonical
+  );
+  
+  // 3. Append code cells to canonical notebook
+  await notebook_writer({
+    action: "append_cell",
+    notebookPath: `notebooks/${reportTitle}.ipynb`,
+    cellType: "code",
+    source: candidate.codeExecuted,
+    outputs: candidate.cellOutputs,
+    executionCount: nextExecutionCount
+  });
+  
+  // 4. Record decision rationale in auto-loop state
+  await updateAutoLoopState(reportTitle, runId, {
+    cycle: currentCycle,
+    selectedWorker: candidate.workerId,
+    trustScore: candidate.trustScore,
+    selectionReason: generateSelectionReason(candidate, allCandidates),
+    rejectedWorkers: buildRejectionList(candidate, allCandidates)
+  });
+  
+  // 5. Update notebook frontmatter with results
+  await updateNotebookFrontmatter(reportTitle, {
+    lastCycle: currentCycle,
+    lastSelectedWorker: candidate.workerId,
+    status: "active"
+  });
+});
+
+// 6. After lock release: save checkpoint
+await checkpoint_manager({
+  action: "save",
+  reportTitle: reportTitle,
+  runId: runId,
+  stageId: `parallel-commit-cycle-${currentCycle}`
+});
+```
+
+**Lock Ordering:**
+
+If you need multiple locks, always acquire in this order:
+1. `QUEUE_LOCK` (priority 1) - protects job queue mutations
+2. `NOTEBOOK_LOCK` (priority 2) - protects notebook file writes
+3. `REPORT_LOCK` (priority 3) - protects report file writes
+
+Release locks in reverse order.
+
+#### Decision Rationale Recording
+
+Store selection decisions in the auto-loop state for audit trail and debugging. This enables post-hoc analysis of why certain candidates were selected.
+
+**Decision Record Schema:**
+
+```typescript
+interface SelectionDecision {
+  /** Current cycle number */
+  cycle: number;
+  
+  /** ID of the selected worker (e.g., "w02") */
+  selectedWorker: string;
+  
+  /** Trust score of selected candidate */
+  trustScore: number;
+  
+  /** Goal progress of selected candidate (0.0 - 1.0) */
+  goalProgress: number;
+  
+  /** Primary metric value (e.g., cv_accuracy_mean) */
+  primaryMetric: number;
+  
+  /** Human-readable reason for selection */
+  reason: string;
+  
+  /** List of rejected candidates with reasons */
+  rejected: RejectedCandidate[];
+}
+
+interface RejectedCandidate {
+  /** Worker ID (e.g., "w01") */
+  workerId: string;
+  
+  /** Why this candidate was not selected */
+  reason: string;
+  
+  /** Trust score (if available) */
+  trustScore?: number;
+  
+  /** Primary metric (if available) */
+  primaryMetric?: number;
+}
+```
+
+**Example Decision Record:**
+
+```typescript
+{
+  cycle: 3,
+  selectedWorker: "w02",
+  trustScore: 87,
+  goalProgress: 0.75,
+  primaryMetric: 0.923,
+  reason: "Best trust score among 3 candidates with equal goal progress",
+  rejected: [
+    { 
+      workerId: "w01", 
+      reason: "trust score 65 < 80 threshold",
+      trustScore: 65,
+      primaryMetric: 0.91
+    },
+    { 
+      workerId: "w03", 
+      reason: "lower goal progress (0.60 vs 0.75)",
+      trustScore: 82,
+      goalProgress: 0.60,
+      primaryMetric: 0.88
+    }
+  ]
+}
+```
+
+**Storing the Decision:**
+
+Decisions are appended to the auto-loop state in the session manifest:
+
+```typescript
+// In auto-loop state (stored in session or notebook frontmatter)
+{
+  autoLoop: {
+    mode: "AUTO",
+    currentCycle: 3,
+    maxCycles: 10,
+    selectionHistory: [
+      // Cycle 1 decision...
+      // Cycle 2 decision...
+      {
+        cycle: 3,
+        selectedWorker: "w02",
+        trustScore: 87,
+        goalProgress: 0.75,
+        primaryMetric: 0.923,
+        reason: "Best trust score among 3 candidates with equal goal progress",
+        rejected: [...]
+      }
+    ]
+  }
+}
+```
+
+**When No Candidate Passes Trust Threshold:**
+
+If all candidates fail the trust threshold:
+
+1. Do NOT commit anything to the canonical notebook
+2. Record the failure in selectionHistory:
+   ```typescript
+   {
+     cycle: 3,
+     selectedWorker: null,
+     trustScore: null,
+     reason: "All candidates failed trust threshold (max: 72, required: 80)",
+     rejected: [
+       { workerId: "w01", reason: "trust=65 < 80" },
+       { workerId: "w02", reason: "trust=72 < 80" },
+       { workerId: "w03", reason: "trust=68 < 80" }
+     ]
+   }
+   ```
+3. Trigger REWORK decision (send workers back with Baksa's challenges)
+4. If rework rounds exhausted (3x), transition to BLOCKED status
 
 ## Best Practices
 

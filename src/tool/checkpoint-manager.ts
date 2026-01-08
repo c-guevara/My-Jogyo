@@ -21,17 +21,24 @@
 
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
+import { constants as fsConstants } from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
-import { durableAtomicWrite } from "../lib/atomic-write";
+import { durableAtomicWrite, readFileNoFollow } from "../lib/atomic-write";
 import {
   getCheckpointDir,
   getCheckpointManifestPath,
   getNotebookPath,
+  getNotebookRootDir,
+  getReportsRootDir,
   ensureDirSync,
   validatePathSegment,
 } from "../lib/paths";
-import { validateArtifactPath, openNoFollow } from "../lib/artifact-security";
+import { isPathContainedIn } from "../lib/path-security";
+import { getNotebookLockPath, DEFAULT_LOCK_TIMEOUT_MS } from "../lib/lock-paths";
+import { withLock } from "../lib/session-lock";
+import { validateArtifactPath } from "../lib/artifact-security";
+import { openNoFollow } from "../lib/atomic-write";
 import {
   CheckpointManifest,
   CheckpointStatus,
@@ -78,7 +85,7 @@ function sha256(content: string): string {
 async function sha256File(filePath: string): Promise<string> {
   let fd: fs.FileHandle | undefined;
   try {
-    fd = await openNoFollow(filePath, 'r');
+    fd = await openNoFollow(filePath, fsConstants.O_RDONLY);
     const hash = crypto.createHash("sha256");
     const stream = fd.createReadStream();
 
@@ -155,16 +162,18 @@ function generateCheckpointCellId(): string {
 
 /**
  * Read a Jupyter notebook from disk.
+ * Security: Uses O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
  *
  * @param notebookPath - Path to the .ipynb file
  * @returns Parsed notebook or null if not found
  */
 async function readNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ENOENT" || err.code === "ELOOP") {
       return null;
     }
     throw error;
@@ -289,6 +298,7 @@ async function listCheckpointIds(checkpointDir: string): Promise<string[]> {
 
 /**
  * Load a checkpoint manifest from disk.
+ * Security: Uses O_NOFOLLOW to atomically reject symlinks (no TOCTOU race).
  *
  * @param manifestPath - Path to the checkpoint.json file
  * @returns The parsed manifest or null if not found/invalid
@@ -297,7 +307,8 @@ async function loadManifest(
   manifestPath: string
 ): Promise<CheckpointManifest | null> {
   try {
-    const content = await fs.readFile(manifestPath, "utf-8");
+    // Security: readFileNoFollow uses O_NOFOLLOW to atomically reject symlinks
+    const content = await readFileNoFollow(manifestPath);
     const manifest = JSON.parse(content);
 
     const validation = validateCheckpointManifest(manifest);
@@ -308,7 +319,13 @@ async function loadManifest(
 
     return manifest as CheckpointManifest;
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") {
+      return null;
+    }
+    // ELOOP means symlink was rejected by O_NOFOLLOW
+    if (err.code === "ELOOP") {
+      console.warn(`Security: checkpoint manifest is a symlink, rejecting: ${manifestPath}`);
       return null;
     }
     console.warn(`Error loading manifest at ${manifestPath}:`, error);
@@ -368,8 +385,20 @@ async function validateArtifact(
 
   let fd: fs.FileHandle | undefined;
   try {
-    fd = await openNoFollow(artifactPath, 'r');
-    
+    fd = await openNoFollow(artifactPath, fsConstants.O_RDONLY);
+
+    // Security: Verify realpath containment to prevent symlinked parent directory escape
+    // This check applies to ALL trust levels (including local) because a symlinked parent
+    // directory could allow reading files outside the intended artifact root
+    const artifactRealPath = await fs.realpath(artifactPath);
+    if (!isPathContainedIn(artifactRealPath, projectRoot, { useRealpath: false })) {
+      await fd.close();
+      return {
+        valid: false,
+        issue: `Security: artifact escapes project root via symlinked parent: ${artifact.relativePath}`,
+      };
+    }
+
     const stats = await fd.stat();
     if (stats.size !== artifact.sizeBytes) {
       await fd.close();
@@ -666,6 +695,31 @@ export const checkpointManager = tool({
         const notebookPath =
           args.notebookPathOverride || getNotebookPath(reportTitle);
 
+        // Validate notebookPathOverride if provided (security: containment + symlink check)
+        if (args.notebookPathOverride) {
+          const resolvedNotebookPath = path.resolve(args.notebookPathOverride);
+          // Check containment within notebooks directory
+          if (!isPathContainedIn(resolvedNotebookPath, getNotebookRootDir())) {
+            throw new Error(
+              `notebookPathOverride must be within notebooks directory: ${resolvedNotebookPath}`
+            );
+          }
+          // Check for symlink if path exists
+          try {
+            const stat = await fs.lstat(resolvedNotebookPath);
+            if (stat.isSymbolicLink()) {
+              throw new Error(
+                `notebookPathOverride cannot be a symlink: ${resolvedNotebookPath}`
+              );
+            }
+          } catch (err) {
+            // ENOENT is OK - notebook may not exist yet and will be created
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              throw err;
+            }
+          }
+        }
+
         // Create checkpoint directory
         const manifestPath = getCheckpointManifestPath(
           reportTitle,
@@ -727,26 +781,36 @@ export const checkpointManager = tool({
           manifestSha256,
         };
 
-        // Append checkpoint cell to notebook and get cell ID
-        const cellId = await appendCheckpointCell(
-          notebookPath,
-          checkpointId,
-          args.stageId,
-          path.relative(projectRoot, manifestPath)
+        // Append checkpoint cell and write manifest atomically under notebook lock
+        // This prevents concurrent checkpoint writes from corrupting the notebook
+        const cellId = await withLock(
+          getNotebookLockPath(reportTitle),
+          async () => {
+            // Append checkpoint cell to notebook and get cell ID
+            const id = await appendCheckpointCell(
+              notebookPath,
+              checkpointId,
+              args.stageId,
+              path.relative(projectRoot, manifestPath)
+            );
+
+            // Update manifest with cell ID
+            manifest.notebook.checkpointCellId = id;
+
+            // Recalculate SHA256 with updated cell ID
+            const finalManifestBase: Omit<CheckpointManifest, "manifestSha256"> = {
+              ...manifest,
+            };
+            delete (finalManifestBase as any).manifestSha256;
+            manifest.manifestSha256 = calculateManifestSha256(finalManifestBase);
+
+            // Write manifest atomically
+            await durableAtomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
+
+            return id;
+          },
+          DEFAULT_LOCK_TIMEOUT_MS
         );
-
-        // Update manifest with cell ID
-        manifest.notebook.checkpointCellId = cellId;
-
-        // Recalculate SHA256 with updated cell ID
-        const finalManifestBase: Omit<CheckpointManifest, "manifestSha256"> = {
-          ...manifest,
-        };
-        delete (finalManifestBase as any).manifestSha256;
-        manifest.manifestSha256 = calculateManifestSha256(finalManifestBase);
-
-        // Write manifest atomically
-        await durableAtomicWrite(manifestPath, JSON.stringify(manifest, null, 2));
 
         return JSON.stringify(
           {
@@ -1187,6 +1251,10 @@ export const checkpointManager = tool({
           for (const ckpt of checkpointsToPrune) {
             const ckptDir = path.dirname(ckpt.manifestPath);
             try {
+              // Security: Verify path is contained within reports directory before deletion
+              if (!isPathContainedIn(ckptDir, getReportsRootDir(), { useRealpath: true })) {
+                throw new Error(`Security: ${ckptDir} escapes containment`);
+              }
               await fs.rm(ckptDir, { recursive: true, force: true });
               prunedIds.push(ckpt.checkpointId);
             } catch (error) {
@@ -1247,6 +1315,31 @@ export const checkpointManager = tool({
         const notebookPath =
           args.notebookPathOverride || getNotebookPath(reportTitle);
 
+        // Validate notebookPathOverride if provided (security: containment + symlink check)
+        if (args.notebookPathOverride) {
+          const resolvedNotebookPath = path.resolve(args.notebookPathOverride);
+          // Check containment within notebooks directory
+          if (!isPathContainedIn(resolvedNotebookPath, getNotebookRootDir())) {
+            throw new Error(
+              `notebookPathOverride must be within notebooks directory: ${resolvedNotebookPath}`
+            );
+          }
+          // Check for symlink if path exists
+          try {
+            const stat = await fs.lstat(resolvedNotebookPath);
+            if (stat.isSymbolicLink()) {
+              throw new Error(
+                `notebookPathOverride cannot be a symlink: ${resolvedNotebookPath}`
+              );
+            }
+          } catch (err) {
+            // ENOENT is OK - notebook may not exist yet and will be created
+            if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+              throw err;
+            }
+          }
+        }
+
         // Create checkpoint directory
         const manifestPath = getCheckpointManifestPath(
           reportTitle,
@@ -1306,37 +1399,43 @@ export const checkpointManager = tool({
           manifestSha256: emergencyManifestSha256,
         };
 
-        // Try to append checkpoint cell to notebook (optional - may fail during abort)
+        // Wrap notebook cell append and manifest write in notebook lock
         let cellId: string | null = null;
-        try {
-          cellId = await appendCheckpointCell(
-            notebookPath,
-            emergencyCheckpointId,
-            args.stageId,
-            path.relative(projectRoot, manifestPath)
-          );
+        await withLock(
+          getNotebookLockPath(reportTitle),
+          async () => {
+            try {
+              cellId = await appendCheckpointCell(
+                notebookPath,
+                emergencyCheckpointId,
+                args.stageId,
+                path.relative(projectRoot, manifestPath)
+              );
 
-          // Update manifest with cell ID
-          emergencyManifest.notebook.checkpointCellId = cellId;
+              // Update manifest with cell ID
+              emergencyManifest.notebook.checkpointCellId = cellId;
 
-          // Recalculate SHA256 with updated cell ID
-          const finalManifestBase: Omit<CheckpointManifest, "manifestSha256"> = {
-            ...emergencyManifest,
-          };
-          delete (finalManifestBase as any).manifestSha256;
-          emergencyManifest.manifestSha256 =
-            calculateManifestSha256(finalManifestBase);
-        } catch (error) {
-          // Cell append failed - continue without it (emergency save prioritizes speed)
-          console.warn(
-            `Emergency checkpoint: Failed to append notebook cell: ${error}`
-          );
-        }
+              // Recalculate SHA256 with updated cell ID
+              const finalManifestBase: Omit<CheckpointManifest, "manifestSha256"> = {
+                ...emergencyManifest,
+              };
+              delete (finalManifestBase as any).manifestSha256;
+              emergencyManifest.manifestSha256 =
+                calculateManifestSha256(finalManifestBase);
+            } catch (error) {
+              // Cell append failed - continue without it (emergency save prioritizes speed)
+              console.warn(
+                `Emergency checkpoint: Failed to append notebook cell: ${error}`
+              );
+            }
 
-        // Write manifest atomically
-        await durableAtomicWrite(
-          manifestPath,
-          JSON.stringify(emergencyManifest, null, 2)
+            // Write manifest atomically
+            await durableAtomicWrite(
+              manifestPath,
+              JSON.stringify(emergencyManifest, null, 2)
+            );
+          },
+          DEFAULT_LOCK_TIMEOUT_MS
         );
 
         return JSON.stringify(

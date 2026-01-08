@@ -147,12 +147,14 @@ export function ensureCellId(cell: NotebookCell, index: number, notebookPath: st
  *
  * @example
  * ```typescript
- * const notebook = JSON.parse(fs.readFileSync('notebook.ipynb', 'utf8'));
+ * // Security: Use O_NOFOLLOW read and atomic write to prevent symlink attacks
+ * // AVOID: fs.readFileSync() follows symlinks, fs.writeFileSync() is non-atomic
+ * const notebook = JSON.parse(readFileNoFollowSync('notebook.ipynb'));
  * const result = migrateNotebookCellIds(notebook, 'notebook.ipynb');
  * console.log(`Migrated ${result.migrated} cells`);
  *
  * if (result.migrated > 0) {
- *   fs.writeFileSync('notebook.ipynb', JSON.stringify(notebook, null, 2));
+ *   durableAtomicWrite('notebook.ipynb', JSON.stringify(notebook, null, 2));
  * }
  * ```
  */

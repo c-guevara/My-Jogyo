@@ -14,10 +14,10 @@ import * as os from "os";
 import * as crypto from "crypto";
 
 // Import the checkpoint-manager tool
-import checkpointManager from "./checkpoint-manager";
+import checkpointManager from "../src/tool/checkpoint-manager";
 
 // Import path utilities for cache clearing
-import { clearProjectRootCache, getCheckpointDir, getCheckpointManifestPath, getNotebookPath } from "../lib/paths";
+import { clearProjectRootCache, getCheckpointDir, getCheckpointManifestPath, getNotebookPath } from "../src/lib/paths";
 
 // =============================================================================
 // TEST SETUP

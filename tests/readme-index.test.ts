@@ -9,7 +9,7 @@ import {
   parseTags,
   WorkspaceEntry,
   ResearchEntry,
-} from "./readme-index";
+} from "../src/lib/readme-index";
 
 // =============================================================================
 // parseReadmeWithSentinels

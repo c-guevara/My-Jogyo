@@ -1,7 +1,7 @@
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export interface FilesystemWarning {
   type: 'network' | 'cloud' | 'unknown';
@@ -33,9 +33,13 @@ export async function checkFilesystemSupport(sessionDir: string): Promise<Filesy
 
 async function checkLinuxFilesystem(sessionDir: string, warnings: FilesystemWarning[]): Promise<void> {
   try {
-    const { stdout } = await execAsync(`df -T "${sessionDir}" | tail -1`);
-    const fields = stdout.trim().split(/\s+/);
-    const fsType = fields[1];
+    // Use execFile to avoid shell injection - no shell pipe
+    const { stdout } = await execFileAsync('df', ['-T', '--', sessionDir]);
+    // Get last line manually instead of piping to tail
+    const lines = stdout.trim().split('\n');
+    const lastLine = lines[lines.length - 1] || '';
+    const fields = lastLine.split(/\s+/);
+    const fsType = fields[1] || '';
 
     if (UNSUPPORTED_FS_TYPES.some(t => fsType.includes(t))) {
       warnings.push({
@@ -48,8 +52,11 @@ async function checkLinuxFilesystem(sessionDir: string, warnings: FilesystemWarn
 
 async function checkDarwinFilesystem(sessionDir: string, warnings: FilesystemWarning[]): Promise<void> {
   try {
-    const { stdout } = await execAsync(`df "${sessionDir}" 2>/dev/null | tail -1`);
-    const fields = stdout.trim().split(/\s+/);
+    // Use execFile to avoid shell injection - no shell pipe or redirect
+    const { stdout } = await execFileAsync('df', ['--', sessionDir]);
+    const lines = stdout.trim().split('\n');
+    const lastLine = lines[lines.length - 1] || '';
+    const fields = lastLine.split(/\s+/);
     
     if (fields.some(f => UNSUPPORTED_FS_TYPES.some(t => f.toLowerCase().includes(t)))) {
       warnings.push({

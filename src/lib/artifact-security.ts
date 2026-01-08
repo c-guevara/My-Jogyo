@@ -13,6 +13,8 @@
 import * as fs from 'fs/promises';
 import { constants } from 'fs';
 import * as path from 'path';
+import { openNoFollow } from './atomic-write';
+import { validatePathSegment } from './paths';
 
 /**
  * Validates that an artifact path is safe and within the artifact root.
@@ -23,23 +25,22 @@ import * as path from 'path';
  * @throws Error if path is absolute, contains traversal, or escapes root
  */
 export function validateArtifactPath(artifactPath: string, artifactRoot: string): string {
-  // Reject absolute paths
   if (path.isAbsolute(artifactPath)) {
     throw new Error(`Absolute paths not allowed: ${artifactPath}`);
   }
   
-  // Normalize and resolve
-  const normalized = path.normalize(artifactPath);
-  
-  // Reject path traversal - check segments, not string includes
-  const segments = normalized.split(path.sep);
-  if (segments.includes('..')) {
-    throw new Error(`Path traversal detected: ${artifactPath}`);
+  const rawSegments = artifactPath.split(/[/\\]/);
+  for (const segment of rawSegments) {
+    if (!segment) continue;
+    if (segment === '..' || segment === '.') {
+      throw new Error(`Path traversal detected: ${artifactPath}`);
+    }
+    validatePathSegment(segment, 'artifactPathSegment');
   }
   
+  const normalized = path.normalize(artifactPath);
   const resolved = path.resolve(artifactRoot, normalized);
   
-  // Must be under artifact root
   if (!resolved.startsWith(path.resolve(artifactRoot) + path.sep)) {
     throw new Error(`Path escaped artifact root: ${artifactPath}`);
   }
@@ -85,35 +86,6 @@ export async function mkdirSafe(dirPath: string, root: string): Promise<void> {
 }
 
 /**
- * Opens a file without following symlinks (POSIX O_NOFOLLOW).
- * 
- * Uses O_NOFOLLOW flag to prevent symlink following on POSIX systems.
- * For write operations, also uses O_EXCL to ensure exclusive creation.
- * 
- * @param filePath - Path to the file to open
- * @param flags - Open mode: 'r' for read, 'w' or 'wx' for exclusive write
- * @returns FileHandle if successful
- * @throws Error if path is a symlink or not a regular file
- */
-export async function openNoFollow(filePath: string, flags: string): Promise<fs.FileHandle> {
-  // POSIX: O_NOFOLLOW prevents following symlinks
-  const numericFlags = flags.includes('w') 
-    ? constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW
-    : constants.O_RDONLY | constants.O_NOFOLLOW;
-  
-  const fd = await fs.open(filePath, numericFlags);
-  
-  // Verify it's a regular file
-  const stat = await fd.stat();
-  if (!stat.isFile()) {
-    await fd.close();
-    throw new Error(`Not a regular file: ${filePath}`);
-  }
-  
-  return fd;
-}
-
-/**
  * Safely writes an artifact with full TOCTOU protection.
  * 
  * Combines all security measures:
@@ -140,7 +112,11 @@ export async function safeWriteArtifact(
   await mkdirSafe(path.dirname(targetPath), artifactRoot);
   
   // Open without following symlinks, create exclusively
-  const fd = await openNoFollow(targetPath, 'wx');
+  // Using numeric flags for atomic-write's openNoFollow (has win32 fallback)
+  const fd = await openNoFollow(
+    targetPath,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL
+  );
   
   try {
     // Re-validate via realpath after file is created

@@ -327,8 +327,7 @@ Gyoshu uses your project's `.venv/` virtual environment:
 
 | Priority | Type | How It's Detected |
 |----------|------|-------------------|
-| 1️⃣ | Custom | `GYOSHU_PYTHON_PATH` env var |
-| 2️⃣ | venv | `.venv/bin/python` exists |
+| 1️⃣ | venv | `.venv/bin/python` exists |
 
 **Quick setup:**
 ```bash

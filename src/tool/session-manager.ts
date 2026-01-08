@@ -23,7 +23,19 @@ import {
   getSessionDir,
   ensureDirSync,
   existsSync,
+  shortenSessionId,
+  validatePathSegment,
 } from "../lib/paths";
+import { getBridgeMetaLockPath, DEFAULT_LOCK_TIMEOUT_MS } from "../lib/lock-paths";
+import { withLock } from "../lib/session-lock";
+import {
+  BridgeMeta,
+  PythonEnvInfo,
+  VerificationRound,
+  VerificationState,
+  isValidBridgeMeta,
+} from "../lib/bridge-meta";
+import { isPathContainedIn } from "../lib/path-security";
 
 // ===== CONSTANTS =====
 
@@ -37,64 +49,16 @@ const BRIDGE_META_FILE = "bridge_meta.json";
  */
 const SESSION_LOCK_FILE = "session.lock";
 
-// ===== INTERFACES =====
-
 /**
- * Python environment info for runtime tracking
+ * Regex pattern for valid session directory names.
+ * Session directories are 12-char hex hashes from shortenSessionId().
+ * Used to filter out non-session directories like "locks/".
  */
-interface PythonEnvInfo {
-  /** Environment type (venv, uv, poetry, conda, etc.) */
-  type: string;
-  /** Path to Python interpreter */
-  pythonPath: string;
-}
+const SESSION_DIR_PATTERN = /^[0-9a-f]{12}$/;
 
-/**
- * A single verification round in the adversarial challenge loop.
- * Tracks the outcome of each verification attempt by Baksa (critic agent).
- */
-interface VerificationRound {
-  /** Round number (1, 2, 3, ...) */
-  round: number;
-  /** ISO 8601 timestamp of verification attempt */
-  timestamp: string;
-  /** Trust score from 0-100 calculated by Baksa (critic agent) */
-  trustScore: number;
-  /** Outcome of this verification round */
-  outcome: "passed" | "failed" | "rework_requested";
-}
-
-/**
- * Verification state for adversarial challenge loops.
- * Tracks the current verification round and history of all attempts.
- */
-interface VerificationState {
-  /** Current verification round. 0 = not started, 1+ = active rounds */
-  currentRound: number;
-  /** Maximum allowed verification rounds before escalation (default: 3) */
-  maxRounds: number;
-  /** History of verification rounds (rounds are 1-indexed) */
-  history: VerificationRound[];
-}
-
-/**
- * Bridge metadata - lightweight runtime state only.
- * This is NOT durable research data - just ephemeral session state.
- */
-interface BridgeMeta {
-  /** Unique session identifier */
-  sessionId: string;
-  /** ISO 8601 timestamp when bridge was started */
-  bridgeStarted: string;
-  /** Python environment information */
-  pythonEnv: PythonEnvInfo;
-  /** Path to the notebook being edited */
-  notebookPath: string;
-  /** Human-readable report title for display purposes */
-  reportTitle?: string;
-  /** Adversarial verification state for challenge loops (optional, runtime only) */
-  verification?: VerificationState;
-}
+// ===== TYPES =====
+// BridgeMeta, PythonEnvInfo, VerificationRound, VerificationState
+// are imported from ../lib/bridge-meta.ts (centralized definitions)
 
 // ===== RUNTIME INITIALIZATION =====
 
@@ -104,7 +68,7 @@ interface BridgeMeta {
  */
 async function ensureGyoshuRuntime(): Promise<void> {
   const runtimeDir = getRuntimeDir();
-  await fs.mkdir(runtimeDir, { recursive: true });
+  ensureDirSync(runtimeDir, 0o700);
 }
 
 /**
@@ -241,47 +205,23 @@ function validateVerificationState(state: unknown): string | null {
   return null;
 }
 
-/**
- * Validates that a session ID is safe to use in file paths.
- * Prevents directory traversal and other path injection attacks.
- *
- * @param sessionId - The session ID to validate
- * @throws Error if session ID is invalid
- */
 function validateSessionId(sessionId: string): void {
-  if (!sessionId || typeof sessionId !== "string") {
-    throw new Error("researchSessionID is required and must be a string");
-  }
-
-  if (sessionId.includes("..") || sessionId.includes("/") || sessionId.includes("\\")) {
-    throw new Error("Invalid researchSessionID: contains path traversal characters");
-  }
-
-  if (sessionId.trim().length === 0) {
-    throw new Error("Invalid researchSessionID: cannot be empty or whitespace");
-  }
-
-  if (sessionId.length > 255) {
-    throw new Error("Invalid researchSessionID: exceeds maximum length of 255 characters");
-  }
+  validatePathSegment(sessionId, "researchSessionID");
 }
 
 // ===== DEFAULT BRIDGE META =====
 
-/**
- * Creates a new bridge metadata object with default values.
- *
- * @param sessionId - The session identifier
- * @param data - Optional initial data to merge
- * @returns A new BridgeMeta object
- */
 function createDefaultBridgeMeta(
   sessionId: string,
   data?: Partial<BridgeMeta>
 ): BridgeMeta {
   const now = new Date().toISOString();
+  const sessionDir = getSessionDir(sessionId);
+  const socketPath = path.join(sessionDir, "bridge.sock");
 
   return {
+    pid: 1,
+    socketPath,
     sessionId,
     bridgeStarted: now,
     pythonEnv: {
@@ -339,14 +279,20 @@ export default tool({
           );
         }
 
-        await fs.mkdir(sessionDir, { recursive: true });
+        ensureDirSync(sessionDir, 0o700);
 
         const bridgeMeta = createDefaultBridgeMeta(
           args.researchSessionID,
           args.data as Partial<BridgeMeta>
         );
 
-        await durableAtomicWrite(bridgeMetaPath, JSON.stringify(bridgeMeta, null, 2));
+        await withLock(
+          getBridgeMetaLockPath(args.researchSessionID),
+          async () => {
+            await durableAtomicWrite(bridgeMetaPath, JSON.stringify(bridgeMeta, null, 2));
+          },
+          DEFAULT_LOCK_TIMEOUT_MS
+        );
 
         return JSON.stringify(
           {
@@ -376,7 +322,11 @@ export default tool({
           throw new Error(`Session '${args.researchSessionID}' not found`);
         }
 
-        const bridgeMeta = await readFile<BridgeMeta>(bridgeMetaPath, true);
+        const rawMeta = await readFile<unknown>(bridgeMetaPath, true);
+        if (!isValidBridgeMeta(rawMeta)) {
+          throw new Error(`Session '${args.researchSessionID}' has invalid or corrupted metadata`);
+        }
+        const bridgeMeta = rawMeta as BridgeMeta;
         const isLocked = await fileExists(lockPath);
 
         return JSON.stringify(
@@ -424,25 +374,40 @@ export default tool({
           throw err;
         }
 
-        for (const entry of entries) {
-          if (!entry.isDirectory()) continue;
+        // Filter to valid session directories only (12-char hex hashes)
+        const validEntries = entries.filter(
+          (entry) => entry.isDirectory() && SESSION_DIR_PATTERN.test(entry.name)
+        );
 
+        for (const entry of validEntries) {
           const bridgeMetaPath = path.join(runtimeDir, entry.name, BRIDGE_META_FILE);
           const lockPath = path.join(runtimeDir, entry.name, SESSION_LOCK_FILE);
 
           try {
-            const bridgeMeta = await readFile<BridgeMeta>(bridgeMetaPath, true);
+            const rawMeta = await readFile<unknown>(bridgeMetaPath, true);
+            
+            if (!isValidBridgeMeta(rawMeta)) {
+              console.error(`[session-manager] Invalid metadata for ${entry.name}, skipping`);
+              continue;
+            }
+            const bridgeMeta = rawMeta as BridgeMeta;
+
+            // Verify anti-poisoning binding: shortId must match hashed sessionId
+            if (shortenSessionId(bridgeMeta.sessionId) !== entry.name) {
+              console.error(`[session-manager] Binding mismatch for ${entry.name}, skipping`);
+              continue;
+            }
+
             const isLocked = existsSync(lockPath);
 
             sessions.push({
               researchSessionID: bridgeMeta.sessionId,
-              bridgeStarted: bridgeMeta.bridgeStarted,
-              notebookPath: bridgeMeta.notebookPath,
-              reportTitle: bridgeMeta.reportTitle || "",
+              bridgeStarted: bridgeMeta.bridgeStarted ?? bridgeMeta.startedAt ?? "",
+              notebookPath: bridgeMeta.notebookPath ?? "",
+              reportTitle: bridgeMeta.reportTitle ?? "",
               isLocked,
             });
           } catch (error) {
-            // Log error but continue listing other sessions
             console.error(`[session-manager] Failed to read session ${entry.name}:`, error);
           }
         }
@@ -479,7 +444,6 @@ export default tool({
           );
         }
 
-        const existing = await readFile<BridgeMeta>(bridgeMetaPath, true);
         const updateData = args.data as Partial<BridgeMeta> | undefined;
 
         let sanitizedVerification: VerificationState | undefined = undefined;
@@ -495,29 +459,38 @@ export default tool({
           };
         }
 
-        const updated: BridgeMeta = {
-          ...existing,
-          ...(updateData?.notebookPath !== undefined && {
-            notebookPath: updateData.notebookPath,
-          }),
-          ...(updateData?.reportTitle !== undefined && {
-            reportTitle: updateData.reportTitle,
-          }),
-          ...(sanitizedVerification !== undefined && {
-            verification: sanitizedVerification,
-          }),
-          sessionId: existing.sessionId,
-          bridgeStarted: existing.bridgeStarted,
-        };
+        const updated = await withLock(
+          getBridgeMetaLockPath(args.researchSessionID),
+          async () => {
+            const existing = await readFile<BridgeMeta>(bridgeMetaPath, true);
 
-        if (updateData?.pythonEnv) {
-          updated.pythonEnv = {
-            ...existing.pythonEnv,
-            ...updateData.pythonEnv,
-          };
-        }
+            const result: BridgeMeta = {
+              ...existing,
+              ...(updateData?.notebookPath !== undefined && {
+                notebookPath: updateData.notebookPath,
+              }),
+              ...(updateData?.reportTitle !== undefined && {
+                reportTitle: updateData.reportTitle,
+              }),
+              ...(sanitizedVerification !== undefined && {
+                verification: sanitizedVerification,
+              }),
+              sessionId: existing.sessionId,
+              bridgeStarted: existing.bridgeStarted,
+            };
 
-        await durableAtomicWrite(bridgeMetaPath, JSON.stringify(updated, null, 2));
+            if (updateData?.pythonEnv) {
+              result.pythonEnv = {
+                ...existing.pythonEnv,
+                ...updateData.pythonEnv,
+              };
+            }
+
+            await durableAtomicWrite(bridgeMetaPath, JSON.stringify(result, null, 2));
+            return result;
+          },
+          DEFAULT_LOCK_TIMEOUT_MS
+        );
 
         return JSON.stringify(
           {
@@ -542,6 +515,11 @@ export default tool({
 
         if (!(await fileExists(sessionDir))) {
           throw new Error(`Session '${args.researchSessionID}' not found`);
+        }
+
+        // Security: Verify path is contained within runtime directory before deletion
+        if (!isPathContainedIn(sessionDir, getRuntimeDir(), { useRealpath: true })) {
+          throw new Error(`Security: ${sessionDir} escapes containment`);
         }
 
         await fs.rm(sessionDir, { recursive: true, force: true });

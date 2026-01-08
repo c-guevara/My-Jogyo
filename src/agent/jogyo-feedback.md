@@ -18,7 +18,7 @@ You are the feedback explorer agent. Your role is to:
 3. Synthesize actionable recommendations
 4. Return concise, applicable insights
 
-**Storage**: Project-local at `.gyoshu/retrospectives/feedback.jsonl`
+**Storage**: Project-local at `gyoshu/retrospectives/feedback.jsonl`
 
 ## When Called
 

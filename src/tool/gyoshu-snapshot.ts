@@ -16,11 +16,17 @@ import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
 import * as path from "path";
 import * as crypto from "crypto";
-import { fileExists, readFile } from "../lib/atomic-write";
-import { getLegacyArtifactsDir, getLegacyManifestPath, getCheckpointDir, getSessionDir } from "../lib/paths";
-
-// Path resolution is handled by ../lib/paths.ts
-// Uses legacy session paths for backward compatibility with existing sessions
+import { fileExists, readFile, readFileNoFollow } from "../lib/atomic-write";
+import { 
+  getCheckpointDir, 
+  getSessionDir,
+  getReportDir,
+  getNotebookPath,
+  getLegacyArtifactsDir, 
+  getLegacyManifestPath,
+  validatePathSegment,
+} from "../lib/paths";
+import { isValidBridgeMeta, type BridgeMeta, type VerificationState } from "../lib/bridge-meta";
 
 /**
  * Session manifest structure (matches session-manager.ts)
@@ -167,42 +173,7 @@ interface ChallengeRecord {
   passedChallenges: string[];
 }
 
-/**
- * A single verification round in the adversarial challenge loop.
- * Matches session-manager.ts VerificationRound.
- */
-interface VerificationRound {
-  round: number;
-  timestamp: string;
-  trustScore: number;
-  outcome: "passed" | "failed" | "rework_requested";
-}
 
-/**
- * Verification state from BridgeMeta.
- * Matches session-manager.ts VerificationState.
- */
-interface VerificationState {
-  /** Current verification round. 0 = not started, 1+ = active rounds */
-  currentRound: number;
-  /** Maximum allowed verification rounds before escalation (default: 3) */
-  maxRounds: number;
-  /** History of verification rounds (rounds are 1-indexed) */
-  history: VerificationRound[];
-}
-
-/**
- * Bridge metadata structure.
- * Matches session-manager.ts BridgeMeta (verification fields only).
- */
-interface BridgeMeta {
-  sessionId: string;
-  bridgeStarted: string;
-  pythonEnv: { type: string; pythonPath: string };
-  notebookPath: string;
-  reportTitle?: string;
-  verification?: VerificationState;
-}
 
 /**
  * Complete session snapshot structure
@@ -245,57 +216,108 @@ interface SessionSnapshot {
   verificationStatus: "pending" | "in_progress" | "verified" | "failed";
 }
 
-/**
- * Validates session ID for path safety
- */
 function validateSessionId(sessionId: string): void {
-  if (!sessionId || typeof sessionId !== "string") {
-    throw new Error("researchSessionID is required and must be a string");
-  }
-
-  if (
-    sessionId.includes("..") ||
-    sessionId.includes("/") ||
-    sessionId.includes("\\")
-  ) {
-    throw new Error(
-      "Invalid researchSessionID: contains path traversal characters"
-    );
-  }
-
-  if (sessionId.trim().length === 0) {
-    throw new Error("Invalid researchSessionID: cannot be empty or whitespace");
-  }
-
-  if (sessionId.length > 255) {
-    throw new Error(
-      "Invalid researchSessionID: exceeds maximum length of 255 characters"
-    );
-  }
+  validatePathSegment(sessionId, "researchSessionID");
 }
 
 /**
- * Gets the path to a session's manifest file
+ * Gets the path to a session's manifest file.
+ * Falls back to legacy path for migration support.
+ * @deprecated Prefer reading from bridge_meta.json in runtime session dir
  */
-function getManifestPath(sessionId: string): string {
+function getLegacyManifestPathForSession(sessionId: string): string {
   return getLegacyManifestPath(sessionId);
 }
 
 /**
- * Gets the path to a session's artifacts directory
+ * Scans canonical report directory for artifacts.
+ * Falls back to legacy artifacts directory if report dir doesn't exist.
  */
-function getArtifactsDir(sessionId: string): string {
-  return getLegacyArtifactsDir(sessionId);
+async function scanReportArtifacts(reportTitle: string | undefined, sessionId: string): Promise<ArtifactInfo[]> {
+  const artifacts: ArtifactInfo[] = [];
+  
+  let scanDir: string | null = null;
+  let pathPrefix = "artifacts/";
+  
+  if (reportTitle) {
+    const canonicalDir = getReportDir(reportTitle);
+    try {
+      await fs.access(canonicalDir);
+      scanDir = canonicalDir;
+      pathPrefix = "";
+    } catch {
+      // Fall through to legacy
+    }
+  }
+  
+  if (!scanDir) {
+    scanDir = getLegacyArtifactsDir(sessionId);
+  }
+
+  try {
+    const entries = await fs.readdir(scanDir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      if (entry.isFile()) {
+        const filePath = path.join(scanDir, entry.name);
+        try {
+          const stats = await fs.lstat(filePath);
+          if (stats.isSymbolicLink()) {
+            continue; // Skip symlinks
+          }
+          artifacts.push({
+            path: `${pathPrefix}${entry.name}`,
+            type: getFileType(entry.name),
+            sizeBytes: stats.size,
+          });
+        } catch {
+          // Skip files that can't be stated
+        }
+      } else if (entry.isDirectory()) {
+        const subDir = path.join(scanDir, entry.name);
+        try {
+          const subEntries = await fs.readdir(subDir, { withFileTypes: true });
+          for (const subEntry of subEntries) {
+            if (subEntry.isFile()) {
+              const subFilePath = path.join(subDir, subEntry.name);
+              try {
+                const stats = await fs.lstat(subFilePath);
+                if (stats.isSymbolicLink()) {
+                  continue; // Skip symlinks
+                }
+                artifacts.push({
+                  path: `${pathPrefix}${entry.name}/${subEntry.name}`,
+                  type: getFileType(subEntry.name),
+                  sizeBytes: stats.size,
+                });
+              } catch {
+                // Skip files that can't be stated
+              }
+            }
+          }
+        } catch {
+          // Skip directories that can't be read
+        }
+      }
+    }
+  } catch {
+    // Directory doesn't exist - that's fine
+  }
+
+  return artifacts;
 }
 
 /**
  * Reads the notebook from a path
+ * Security: Uses O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
  */
 async function readNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    // Security: readFileNoFollow uses O_NOFOLLOW to atomically reject symlinks
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch {
+    // Returns null for ENOENT, ELOOP (symlink), or parse errors
     return null;
   }
 }
@@ -333,37 +355,7 @@ function getFileType(filename: string): string {
   return typeMap[ext] || "application/octet-stream";
 }
 
-/**
- * Scans artifacts directory for files
- */
-async function scanArtifacts(sessionId: string): Promise<ArtifactInfo[]> {
-  const artifactsDir = getArtifactsDir(sessionId);
-  const artifacts: ArtifactInfo[] = [];
 
-  try {
-    const entries = await fs.readdir(artifactsDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-      if (entry.isFile()) {
-        const filePath = path.join(artifactsDir, entry.name);
-        try {
-          const stats = await fs.stat(filePath);
-          artifacts.push({
-            path: `artifacts/${entry.name}`,
-            type: getFileType(entry.name),
-            sizeBytes: stats.size,
-          });
-        } catch {
-          // Skip files that can't be stated
-        }
-      }
-    }
-  } catch {
-    // Artifacts directory doesn't exist - that's fine
-  }
-
-  return artifacts;
-}
 
 /**
  * Builds recent cells from manifest execution data
@@ -434,17 +426,107 @@ function calculateElapsedMinutes(createdAt: string): number {
 }
 
 const BRIDGE_META_FILE = "bridge_meta.json";
+const SESSION_MANIFEST_FILE = "session_manifest.json";
 
-async function getSessionBridgeMeta(sessionId: string): Promise<BridgeMeta | null> {
+/**
+ * Result of loading a session manifest, including source for observability.
+ * Matches gyoshu-completion.ts ManifestLoadResult.
+ */
+interface ManifestLoadResult {
+  manifest: SessionManifest;
+  source: "session_manifest" | "bridge_meta" | "legacy_manifest";
+}
+
+/**
+ * Get path to session_manifest.json in session's runtime directory.
+ */
+function getManifestPath(sessionId: string): string {
+  return path.join(getSessionDir(sessionId), SESSION_MANIFEST_FILE);
+}
+
+/**
+ * Get path to bridge_meta.json in session's runtime directory.
+ */
+function getBridgeMetaPath(sessionId: string): string {
+  return path.join(getSessionDir(sessionId), BRIDGE_META_FILE);
+}
+
+async function readBridgeMeta(sessionId: string): Promise<BridgeMeta | null> {
+  const metaPath = getBridgeMetaPath(sessionId);
+  if (!(await fileExists(metaPath))) {
+    return null;
+  }
   try {
-    const bridgeMetaPath = path.join(getSessionDir(sessionId), BRIDGE_META_FILE);
-    if (!(await fileExists(bridgeMetaPath))) {
+    const meta = await readFile<unknown>(metaPath, true);
+    if (!isValidBridgeMeta(meta)) {
       return null;
     }
-    return await readFile<BridgeMeta>(bridgeMetaPath, true);
+    return meta;
   } catch {
     return null;
   }
+}
+
+/**
+ * Create a minimal session manifest from bridge metadata.
+ * Used as fallback when session_manifest.json doesn't exist.
+ */
+function createMinimalManifestFromBridgeMeta(sessionId: string, bridgeMeta: BridgeMeta): SessionManifest {
+  const timestamp = bridgeMeta.bridgeStarted || bridgeMeta.startedAt || new Date().toISOString();
+  return {
+    researchSessionID: sessionId,
+    created: timestamp,
+    updated: timestamp,
+    status: "active",
+    notebookPath: bridgeMeta.notebookPath,
+    reportTitle: bridgeMeta.reportTitle,
+    environment: {
+      pythonVersion: "",
+      platform: "",
+      packages: {},
+      randomSeeds: {},
+    },
+    executedCells: {},
+    executionOrder: [],
+    lastSuccessfulExecution: 0,
+  };
+}
+
+/**
+ * Load session manifest using the same fallback chain as gyoshu-completion.ts:
+ * 1. session_manifest.json (canonical location in runtime dir)
+ * 2. bridge_meta.json (created by python-repl.ts)
+ * 3. Legacy manifest path (~/.gyoshu/sessions/{sessionId}/manifest.json)
+ *
+ * Returns null if session not found in any location.
+ */
+async function loadSessionManifest(sessionId: string): Promise<ManifestLoadResult | null> {
+  // 1. Try session_manifest.json first (canonical location)
+  const manifestPath = getManifestPath(sessionId);
+  if (await fileExists(manifestPath)) {
+    const manifest = await readFile<SessionManifest>(manifestPath, true).catch(() => null);
+    if (manifest) {
+      return { manifest, source: "session_manifest" };
+    }
+  }
+
+  // 2. Fall back to bridge_meta.json (created by python-repl.ts)
+  const bridgeMeta = await readBridgeMeta(sessionId);
+  if (bridgeMeta) {
+    const manifest = createMinimalManifestFromBridgeMeta(sessionId, bridgeMeta);
+    return { manifest, source: "bridge_meta" };
+  }
+
+  // 3. Fall back to legacy manifest path
+  const legacyPath = getLegacyManifestPath(sessionId);
+  if (await fileExists(legacyPath)) {
+    const manifest = await readFile<SessionManifest>(legacyPath, true).catch(() => null);
+    if (manifest) {
+      return { manifest, source: "legacy_manifest" };
+    }
+  }
+
+  return null;
 }
 
 function mapVerificationToSnapshot(verification: VerificationState | undefined): {
@@ -546,13 +628,13 @@ export default tool({
       includeReplState = false,
     } = args;
 
-    // Validate session ID
     validateSessionId(researchSessionID);
 
-    const manifestPath = getManifestPath(researchSessionID);
-
-    // Check if session exists
-    if (!(await fileExists(manifestPath))) {
+    // Load session manifest using same fallback chain as gyoshu-completion.ts:
+    // 1. session_manifest.json → 2. bridge_meta.json → 3. legacy manifest
+    const loadResult = await loadSessionManifest(researchSessionID);
+    
+    if (!loadResult) {
       return JSON.stringify({
         success: false,
         error: `Session '${researchSessionID}' not found`,
@@ -560,39 +642,40 @@ export default tool({
       });
     }
 
-    // Read session manifest
-    let manifest: SessionManifest;
-    try {
-      manifest = await readFile<SessionManifest>(manifestPath, true);
-    } catch (e) {
-      return JSON.stringify({
-        success: false,
-        error: `Failed to read session manifest: ${(e as Error).message}`,
-        snapshot: null,
-      });
-    }
+    const { manifest, source: manifestSource } = loadResult;
+    const notebookPath = manifest.notebookPath;
+    const reportTitle = manifest.reportTitle || 
+      manifest.goal?.toLowerCase().replace(/\s+/g, "-").slice(0, 50);
 
-    // Read notebook if path exists
+    // Read bridge meta separately for verification state (if not already loaded via manifest)
+    const bridgeMeta = manifestSource === "bridge_meta" 
+      ? await readBridgeMeta(researchSessionID) 
+      : await readBridgeMeta(researchSessionID);
+
+    // Read notebook - try canonical path first, then manifest path
     let notebook: Notebook | null = null;
-    if (manifest.notebookPath) {
-      notebook = await readNotebook(manifest.notebookPath);
+    if (reportTitle) {
+      const canonicalNotebookPath = getNotebookPath(reportTitle);
+      notebook = await readNotebook(canonicalNotebookPath);
+    }
+    if (!notebook && notebookPath) {
+      notebook = await readNotebook(notebookPath);
     }
 
-    // Scan artifacts
-    const artifacts = await scanArtifacts(researchSessionID);
+    // Scan artifacts using canonical report dir with legacy fallback
+    const artifacts = await scanReportArtifacts(reportTitle, researchSessionID);
 
-    // Check for checkpoints
     let lastCheckpoint: CheckpointInfo | undefined = undefined;
     let resumable = false;
 
-    const reportTitle =
+    const effectiveReportTitle = reportTitle ||
       manifest.reportTitle ||
       manifest.goal?.toLowerCase().replace(/\s+/g, "-").slice(0, 50);
 
-    if (reportTitle) {
+    if (effectiveReportTitle) {
       try {
         const checkpointDir = getCheckpointDir(
-          reportTitle,
+          effectiveReportTitle,
           manifest.runId || "run-001"
         );
 
@@ -610,8 +693,7 @@ export default tool({
               latest.name,
               "checkpoint.json"
             );
-            const content = await fs
-              .readFile(checkpointManifestPath, "utf-8")
+            const content = await readFileNoFollow(checkpointManifestPath)
               .catch(() => null);
             if (content) {
               try {
@@ -693,12 +775,9 @@ export default tool({
       };
     }
 
-    // Calculate timing
     const lastActivityAt = manifest.updated || manifest.created;
     const elapsedMinutes = calculateElapsedMinutes(manifest.created);
 
-    // Read bridge metadata for verification state
-    const bridgeMeta = await getSessionBridgeMeta(researchSessionID);
     const verificationData = mapVerificationToSnapshot(bridgeMeta?.verification);
 
     // Build complete snapshot
@@ -730,6 +809,7 @@ export default tool({
         success: true,
         snapshot,
         meta: {
+          manifestSource,
           manifestStatus: manifest.status,
           notebookExists: notebook !== null,
           cellCount: notebook?.cells.length ?? 0,

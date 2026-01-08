@@ -19,10 +19,10 @@ import * as path from "path";
 import * as os from "os";
 
 // Import the migration-tool
-import migrationTool from "./migration-tool";
+import migrationTool from "../src/tool/migration-tool";
 
 // Import path utilities
-import { clearProjectRootCache, getLegacySessionsDir } from "../lib/paths";
+import { clearProjectRootCache, getLegacySessionsDir } from "../src/lib/paths";
 
 // =============================================================================
 // TEST SETUP

@@ -18,7 +18,7 @@
 import { tool } from "@opencode-ai/plugin";
 import * as fs from "fs/promises";
 import * as path from "path";
-import { durableAtomicWrite, fileExists, readFile } from "../lib/atomic-write";
+import { durableAtomicWrite, fileExists, readFile, readFileNoFollow, copyFileNoFollow } from "../lib/atomic-write";
 import {
   getLegacySessionsDir,
   hasLegacySessions,
@@ -36,6 +36,7 @@ import {
   getReportsRootDir,
   getNotebookPath,
   getReportDir,
+  validatePathSegment,
 } from "../lib/paths";
 import {
   GyoshuFrontmatter,
@@ -286,34 +287,8 @@ interface NotebookMigrationResult {
 // VALIDATION
 // =============================================================================
 
-/**
- * Validates that an ID is safe to use in file paths.
- * Prevents directory traversal and other path injection attacks.
- *
- * @param id - The ID to validate
- * @param type - Type of ID for error messages
- * @throws Error if ID is invalid
- */
-function validateId(id: string, type: string): void {
-  if (!id || typeof id !== "string") {
-    throw new Error(`${type} is required and must be a string`);
-  }
-
-  // Prevent path traversal attacks
-  if (id.includes("..") || id.includes("/") || id.includes("\\")) {
-    throw new Error(`Invalid ${type}: contains path traversal characters`);
-  }
-
-  // Prevent empty or whitespace-only IDs
-  if (id.trim().length === 0) {
-    throw new Error(`Invalid ${type}: cannot be empty or whitespace`);
-  }
-
-  // Limit length to prevent filesystem issues
-  if (id.length > 255) {
-    throw new Error(`Invalid ${type}: exceeds maximum length of 255 characters`);
-  }
-}
+// validateId removed - use validatePathSegment from ../lib/paths instead
+// validatePathSegment provides stronger security: NFC Unicode normalization, null byte check
 
 // =============================================================================
 // HELPER FUNCTIONS
@@ -335,10 +310,10 @@ async function ensureResearchDirs(researchId: string): Promise<void> {
   const notebooksDir = getResearchNotebooksDir(researchId);
   const artifactsDir = getResearchArtifactsDir(researchId);
 
-  await fs.mkdir(researchPath, { recursive: true });
-  await fs.mkdir(runsDir, { recursive: true });
-  await fs.mkdir(notebooksDir, { recursive: true });
-  await fs.mkdir(artifactsDir, { recursive: true });
+  ensureDirSync(researchPath);
+  ensureDirSync(runsDir);
+  ensureDirSync(notebooksDir);
+  ensureDirSync(artifactsDir);
 }
 
 /**
@@ -349,9 +324,9 @@ async function ensureRunDirs(researchId: string, runId: string): Promise<void> {
   const plotsDir = path.join(runArtifactsDir, "plots");
   const exportsDir = path.join(runArtifactsDir, "exports");
 
-  await fs.mkdir(runArtifactsDir, { recursive: true });
-  await fs.mkdir(plotsDir, { recursive: true });
-  await fs.mkdir(exportsDir, { recursive: true });
+  ensureDirSync(runArtifactsDir);
+  ensureDirSync(plotsDir);
+  ensureDirSync(exportsDir);
 }
 
 /**
@@ -366,13 +341,15 @@ async function countFilesInDir(dirPath: string): Promise<number> {
   }
 }
 
-/**
- * Recursively copy a directory.
- */
 async function copyDirectory(src: string, dest: string): Promise<number> {
   let copiedCount = 0;
 
-  await fs.mkdir(dest, { recursive: true });
+  const srcStat = await fs.lstat(src);
+  if (srcStat.isSymbolicLink()) {
+    throw new Error(`Security: ${src} is a symlink, not a directory`);
+  }
+
+  ensureDirSync(dest, 0o700);
 
   const entries = await fs.readdir(src, { withFileTypes: true });
 
@@ -380,10 +357,16 @@ async function copyDirectory(src: string, dest: string): Promise<number> {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
 
-    if (entry.isDirectory()) {
+    const entryStat = await fs.lstat(srcPath);
+
+    if (entryStat.isSymbolicLink()) {
+      throw new Error(`Security: ${srcPath} is a symlink, refusing to follow`);
+    }
+
+    if (entryStat.isDirectory()) {
       copiedCount += await copyDirectory(srcPath, destPath);
-    } else {
-      await fs.copyFile(srcPath, destPath);
+    } else if (entryStat.isFile()) {
+      await copyFileNoFollow(srcPath, destPath);
       copiedCount++;
     }
   }
@@ -404,7 +387,7 @@ async function researchExistsForSession(sessionId: string): Promise<boolean> {
  */
 async function loadNotebook(notebookPath: string): Promise<Notebook | null> {
   try {
-    const content = await fs.readFile(notebookPath, "utf-8");
+    const content = await readFileNoFollow(notebookPath);
     return JSON.parse(content) as Notebook;
   } catch {
     return null;
@@ -415,7 +398,7 @@ async function loadNotebook(notebookPath: string): Promise<Notebook | null> {
  * Save a notebook with atomic writes.
  */
 async function writeNotebook(notebookPath: string, notebook: Notebook): Promise<void> {
-  await fs.mkdir(path.dirname(notebookPath), { recursive: true });
+  ensureDirSync(path.dirname(notebookPath));
   await durableAtomicWrite(notebookPath, JSON.stringify(notebook, null, 2));
 }
 
@@ -538,7 +521,7 @@ async function migrateResearchToNotebook(
   };
 
   try {
-    validateId(researchId, "researchId");
+    validatePathSegment(researchId, "researchId");
 
     // Check if already migrated
     if (await notebookExistsInNewLocation(slug)) {
@@ -568,8 +551,8 @@ async function migrateResearchToNotebook(
 
     if (!dryRun) {
       // Create directories
-      await fs.mkdir(path.dirname(targetNotebookPath), { recursive: true });
-      await fs.mkdir(targetOutputsDir, { recursive: true });
+      ensureDirSync(path.dirname(targetNotebookPath));
+      ensureDirSync(targetOutputsDir);
 
       // Find and copy/update notebook
       let notebook: Notebook | null = null;
@@ -783,7 +766,7 @@ async function migrateSingleSession(
   };
 
   try {
-    validateId(sessionId, "sessionId");
+    validatePathSegment(sessionId, "sessionId");
 
     // Check if already migrated
     if (await researchExistsForSession(sessionId)) {
@@ -883,12 +866,11 @@ async function migrateSingleSession(
         ],
       };
 
-      // Copy notebook if it exists
       const legacyNotebookPath = await findLegacyNotebook(sessionDir);
       if (legacyNotebookPath) {
         const newNotebookDir = getResearchNotebooksDir(researchId);
         const newNotebookPath = path.join(newNotebookDir, `${runId}.ipynb`);
-        await fs.copyFile(legacyNotebookPath, newNotebookPath);
+        await copyFileNoFollow(legacyNotebookPath, newNotebookPath);
         result.notebookPath = newNotebookPath;
       }
 
@@ -966,7 +948,7 @@ async function verifySingleMigration(sessionId: string): Promise<VerifyResult> {
   };
 
   try {
-    validateId(sessionId, "sessionId");
+    validatePathSegment(sessionId, "sessionId");
 
     // Check if research exists
     const researchId = sessionId;
@@ -1136,7 +1118,7 @@ export default tool({
 
         // If specific session requested, migrate just that one
         if (args.sessionId) {
-          validateId(args.sessionId, "sessionId");
+          validatePathSegment(args.sessionId, "sessionId");
           const result = await migrateSingleSession(args.sessionId, dryRun);
 
           return JSON.stringify(
@@ -1218,7 +1200,7 @@ export default tool({
       case "verify": {
         // If specific session requested, verify just that one
         if (args.sessionId) {
-          validateId(args.sessionId, "sessionId");
+          validatePathSegment(args.sessionId, "sessionId");
           const result = await verifySingleMigration(args.sessionId);
 
           return JSON.stringify(
@@ -1320,7 +1302,7 @@ export default tool({
 
         // If specific research requested, migrate just that one
         if (args.sessionId) {
-          validateId(args.sessionId, "researchId");
+          validatePathSegment(args.sessionId, "researchId");
           const result = await migrateResearchToNotebook(args.sessionId, dryRun);
 
           return JSON.stringify(
