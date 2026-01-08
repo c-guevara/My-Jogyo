@@ -2,7 +2,6 @@
 mode: subagent
 description: Generates human-readable, narrative research reports from structured context
 model: opencode/minimax-m2.1-free
-temperature: 1.0
 maxSteps: 5
 tools:
   read: true

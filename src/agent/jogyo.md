@@ -2,7 +2,6 @@
 mode: subagent
 description: Scientific research agent with Python REPL and structured output markers
 model: opencode/minimax-m2.1-free
-temperature: 1.0
 maxSteps: 50
 tools:
   python-repl: true

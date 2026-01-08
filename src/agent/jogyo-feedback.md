@@ -2,7 +2,6 @@
 mode: subagent
 description: Explores retrospective feedback to extract lessons and patterns for research improvement
 model: opencode/minimax-m2.1-free
-temperature: 1.0
 maxSteps: 10
 tools:
   retrospective-store: true
