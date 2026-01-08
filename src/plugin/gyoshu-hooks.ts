@@ -15,12 +15,12 @@ function safeUnlinkSocket(socketPath: string): void {
     if (stat.isSocket()) {
       fs.unlinkSync(socketPath);
     } else {
-      console.warn(`[gyoshu-hooks] Refusing to unlink non-socket file: ${socketPath}`);
+      process.env.GYOSHU_DEBUG && console.warn(`[gyoshu-hooks] Refusing to unlink non-socket file: ${socketPath}`);
     }
   } catch (err: unknown) {
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr.code !== 'ENOENT') {
-      console.warn(`[gyoshu-hooks] lstat failed for ${socketPath}: ${nodeErr.message}`);
+      process.env.GYOSHU_DEBUG && console.warn(`[gyoshu-hooks] lstat failed for ${socketPath}: ${nodeErr.message}`);
     }
   }
 }
@@ -275,22 +275,22 @@ async function onSuccessfulContinuationSend(reportTitle: string): Promise<void> 
   await saveState(state);
 }
 
-export function registerAutoLoop(state: AutoLoopState): void {
+function registerAutoLoop(state: AutoLoopState): void {
   if (state.active) {
     activeAutoLoops.set(state.reportTitle, state);
   }
 }
 
-export function unregisterAutoLoop(reportTitle: string): void {
+function unregisterAutoLoop(reportTitle: string): void {
   activeAutoLoops.delete(reportTitle);
   recentOutputBuffer.delete(reportTitle);
 }
 
-export function isAutoLoopActive(reportTitle: string): boolean {
+function isAutoLoopActive(reportTitle: string): boolean {
   return activeAutoLoops.has(reportTitle);
 }
 
-export async function refreshAutoLoopState(reportTitle: string): Promise<void> {
+async function refreshAutoLoopState(reportTitle: string): Promise<void> {
   const state = await loadState(reportTitle);
   if (state?.active) {
     activeAutoLoops.set(reportTitle, state);
@@ -372,7 +372,7 @@ async function killBridge(sessionId: string): Promise<void> {
   const lockPath = getBridgeMetaLockPath(sessionId);
   
   if (meta.sessionId !== sessionId) {
-    console.warn(`[gyoshu-hooks] Session ID mismatch in killBridge: expected ${sessionId}, got ${meta.sessionId}`);
+    process.env.GYOSHU_DEBUG && console.warn(`[gyoshu-hooks] Session ID mismatch in killBridge: expected ${sessionId}, got ${meta.sessionId}`);
     await deleteMetaWithLock(metaPath, lockPath);
     return;
   }
@@ -403,7 +403,7 @@ async function killBridgeByShortId(shortId: string): Promise<void> {
   const lockPath = getBridgeMetaLockPathByShortId(shortId);
   
   if (shortenSessionId(meta.sessionId) !== shortId) {
-    console.warn(`[gyoshu-hooks] Binding mismatch in killBridgeByShortId: expected ${shortId}, got ${shortenSessionId(meta.sessionId)}`);
+    process.env.GYOSHU_DEBUG && console.warn(`[gyoshu-hooks] Binding mismatch in killBridgeByShortId: expected ${shortId}, got ${shortenSessionId(meta.sessionId)}`);
     await deleteMetaWithLock(metaPath, lockPath);
     return;
   }
@@ -473,8 +473,14 @@ export const GyoshuPlugin: Plugin = async ({ client }) => {
   idleCheckInterval = setInterval(killIdleBridges, IDLE_CHECK_INTERVAL_MS);
   
   return {
+    // NOTE: tool.execute.after receives:
+    //   input: { tool: string; sessionID: string; callID: string; }
+    //   output: { title: string; output: string; metadata: any; }
+    // The original tool args are in output.metadata (if the tool stored them there)
     "tool.execute.after": async (input, output) => {
-      const args = (input as { args?: Record<string, unknown> }).args;
+      // Extract args from output.metadata (where tools may store their call args)
+      const metadata = output?.metadata as Record<string, unknown> | undefined;
+      const args = metadata?.args as Record<string, unknown> | undefined;
       
       const toolReportTitle = extractReportTitleFromArgs(args);
       if (toolReportTitle && activeAutoLoops.has(toolReportTitle)) {
@@ -504,7 +510,7 @@ export const GyoshuPlugin: Plugin = async ({ client }) => {
       
       if (input.tool === "gyoshu-completion") {
         const reportTitle = args?.reportTitle as string | undefined;
-        const outputText = typeof output === "string" ? output : JSON.stringify(output);
+        const outputText = typeof output?.output === "string" ? output.output : JSON.stringify(output);
         if (reportTitle) {
           recentOutputBuffer.set(reportTitle, outputText);
         }
@@ -519,49 +525,27 @@ export const GyoshuPlugin: Plugin = async ({ client }) => {
       }
     },
     
-    "agent.after": async ({ output }) => {
-      const outputText = typeof output === "string" ? output : "";
-      
-      const extractedTags = extractPromiseTags(outputText);
-      for (const tag of extractedTags) {
-        if (TERMINAL_PROMISE_TAGS.includes(tag as typeof TERMINAL_PROMISE_TAGS[number])) {
-          const matchedReportTitles = findReportTitlesInOutput(outputText);
-          if (matchedReportTitles.length > 0) {
-            for (const reportTitle of matchedReportTitles) {
-              await deactivateAutoLoop(reportTitle);
-            }
-          }
-          return;
-        }
-      }
-      
-      for (const [reportTitle] of activeAutoLoops) {
-        const bufferedOutput = recentOutputBuffer.get(reportTitle) || "";
-        const combinedOutput = bufferedOutput + outputText;
-        
-        const result = await checkAutoLoopContinuation(reportTitle, combinedOutput, client);
-        
-        if (result.budgetExhaustedMessage) {
-          const sent = await trySendContinuationPrompt(client, result.budgetExhaustedMessage);
-          if (sent) {
-            await onSuccessfulContinuationSend(reportTitle);
-          }
-        } else if (result.prompt) {
-          const sent = await trySendContinuationPrompt(client, result.prompt);
-          if (sent) {
-            await onSuccessfulContinuationSend(reportTitle);
-          }
-        }
-        
-        recentOutputBuffer.delete(reportTitle);
-      }
-    },
+    // NOTE: OpenCode does not have an "agent.after" hook.
+    // Auto-loop continuation logic that was here has been disabled.
+    // When/if OpenCode adds an agent completion hook, the following would need to be restored:
+    // - Detect terminal promise tags (GYOSHU_AUTO_COMPLETE, GYOSHU_AUTO_BLOCKED, GYOSHU_AUTO_BUDGET_EXHAUSTED)
+    // - Call checkAutoLoopContinuation() and trySendContinuationPrompt() for active auto-loops
+    // The auto-loop state management code is preserved for when this becomes available.
     
     event: async ({ event }) => {
       const eventType = event.type as string;
       
+      // Handle session cleanup (merged from removed 'cleanup' hook)
       if (eventType === "session.end" || eventType === "session.disposed") {
+        // Stop idle check interval
+        if (idleCheckInterval) {
+          clearInterval(idleCheckInterval);
+          idleCheckInterval = null;
+        }
+        
+        // Clean up all bridges and session state
         cleanupAllBridges();
+        activeSessions.clear();
         activeAutoLoops.clear();
         recentOutputBuffer.clear();
         injectionInFlight.clear();
@@ -572,6 +556,9 @@ export const GyoshuPlugin: Plugin = async ({ client }) => {
         saveDebounceTimers.clear();
       }
       
+      // Auto-loop continuation on idle/message events
+      // NOTE: This is a partial replacement for the removed "agent.after" hook.
+      // It only triggers on explicit idle/message events, not on every agent turn completion.
       if (eventType === "agent.idle" || eventType === "message.completed") {
         for (const [reportTitle] of activeAutoLoops) {
           const bufferedOutput = recentOutputBuffer.get(reportTitle) || "";
@@ -593,23 +580,8 @@ export const GyoshuPlugin: Plugin = async ({ client }) => {
       }
     },
     
-    cleanup: async () => {
-      if (idleCheckInterval) {
-        clearInterval(idleCheckInterval);
-        idleCheckInterval = null;
-      }
-      
-      cleanupAllBridges();
-      activeSessions.clear();
-      activeAutoLoops.clear();
-      recentOutputBuffer.clear();
-      injectionInFlight.clear();
-      lastProcessedOutputHash.clear();
-      for (const timer of saveDebounceTimers.values()) {
-        clearTimeout(timer);
-      }
-      saveDebounceTimers.clear();
-    },
+    // NOTE: OpenCode does not have a 'cleanup' hook.
+    // Cleanup logic has been moved to the 'event' hook, listening for 'session.end' and 'session.disposed'.
   };
 };
 

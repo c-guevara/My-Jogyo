@@ -8,7 +8,6 @@ import { readFileNoFollowSync, openNoFollowSync } from "./lib/atomic-write";
 import { ensureDirSync, validatePathSegment } from "./lib/paths";
 
 import manifest from "./gyoshu-manifest.json";
-import { GyoshuPlugin as GyoshuHooks } from "./plugin/gyoshu-hooks";
 
 const OPENCODE_CONFIG = path.join(homedir(), ".config", "opencode");
 const GYOSHU_STATE_DIR = path.join(OPENCODE_CONFIG, ".gyoshu");
@@ -867,32 +866,46 @@ function autoInstall(): InstallResult {
 }
 
 export const GyoshuPlugin: Plugin = async (ctx) => {
-  const installResult = autoInstall();
+  // Always return a valid Hooks object, even on error
+  const emptyHooks = {};
+  
+  try {
+    const installResult = autoInstall();
 
-  if (installResult.fatal) {
-    console.error(`❌ Gyoshu: Fatal installation error`);
-    for (const error of installResult.errors) {
-      console.error(`   - ${error}`);
+    if (installResult.fatal) {
+      console.error(`❌ Gyoshu: Fatal installation error`);
+      for (const error of installResult.errors) {
+        console.error(`   - ${error}`);
+      }
     }
-    return GyoshuHooks(ctx);
-  }
 
-  if (installResult.installed > 0) {
-    console.log(`🎓 Gyoshu: Installed ${installResult.installed} files to ~/.config/opencode/`);
-  }
-
-  if (installResult.updated > 0) {
-    console.log(`🎓 Gyoshu: Updated ${installResult.updated} files`);
-  }
-
-  if (installResult.errors.length > 0) {
-    console.warn(`⚠️  Gyoshu: Some issues occurred:`);
-    for (const error of installResult.errors) {
-      console.warn(`   - ${error}`);
+    if (installResult.installed > 0) {
+      console.log(`🎓 Gyoshu: Installed ${installResult.installed} files to ~/.config/opencode/`);
     }
-  }
 
-  return GyoshuHooks(ctx);
+    if (installResult.updated > 0) {
+      console.log(`🎓 Gyoshu: Updated ${installResult.updated} files`);
+    }
+
+    if (installResult.errors.length > 0) {
+      console.warn(`⚠️  Gyoshu: Some issues occurred:`);
+      for (const error of installResult.errors) {
+        console.warn(`   - ${error}`);
+      }
+    }
+
+    try {
+      const { GyoshuPlugin: GyoshuHooks } = await import("./plugin/gyoshu-hooks");
+      const hooks = await GyoshuHooks(ctx);
+      return hooks || emptyHooks;
+    } catch (hooksError) {
+      console.error(`❌ Gyoshu: Failed to initialize hooks: ${hooksError instanceof Error ? hooksError.message : String(hooksError)}`);
+      return emptyHooks;
+    }
+  } catch (err) {
+    console.error(`❌ Gyoshu: Plugin initialization failed: ${err instanceof Error ? err.message : String(err)}`);
+    return emptyHooks;
+  }
 };
 
 export default GyoshuPlugin;

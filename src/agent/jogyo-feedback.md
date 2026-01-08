@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Explores retrospective feedback to extract lessons and patterns for research improvement
-model: opencode/grok-code
+model: opencode/minimax-m2.1-free
 temperature: 0.3
 maxSteps: 10
 tools:

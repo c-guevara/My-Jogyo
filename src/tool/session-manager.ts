@@ -387,14 +387,14 @@ export default tool({
             const rawMeta = await readFile<unknown>(bridgeMetaPath, true);
             
             if (!isValidBridgeMeta(rawMeta)) {
-              console.error(`[session-manager] Invalid metadata for ${entry.name}, skipping`);
+              process.env.GYOSHU_DEBUG && console.error(`[session-manager] Invalid metadata for ${entry.name}, skipping`);
               continue;
             }
             const bridgeMeta = rawMeta as BridgeMeta;
 
             // Verify anti-poisoning binding: shortId must match hashed sessionId
             if (shortenSessionId(bridgeMeta.sessionId) !== entry.name) {
-              console.error(`[session-manager] Binding mismatch for ${entry.name}, skipping`);
+              process.env.GYOSHU_DEBUG && console.error(`[session-manager] Binding mismatch for ${entry.name}, skipping`);
               continue;
             }
 
@@ -408,7 +408,7 @@ export default tool({
               isLocked,
             });
           } catch (error) {
-            console.error(`[session-manager] Failed to read session ${entry.name}:`, error);
+            process.env.GYOSHU_DEBUG && console.error(`[session-manager] Failed to read session ${entry.name}:`, error);
           }
         }
 

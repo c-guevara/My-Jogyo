@@ -189,7 +189,7 @@ export async function durableAtomicWrite(targetPath: string, data: string): Prom
         await dirFd.close();
       }
     } catch (e) {
-      console.warn(`[atomic-write] Directory fsync failed for ${dir}: ${(e as Error).message}`);
+      process.env.GYOSHU_DEBUG && console.warn(`[atomic-write] Directory fsync failed for ${dir}: ${(e as Error).message}`);
     }
   } finally {
     if (!success) {

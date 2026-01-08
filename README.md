@@ -153,17 +153,26 @@ opencode
 
 ## 📚 Examples
 
-See the [`examples/`](examples/) directory for complete worked examples:
+### Binance Futures Comprehensive EDA
 
-| Example | Type | What It Shows |
-|---------|------|---------------|
-| [COVID-19 EDA](examples/01-covid-eda/) | Exploratory Data Analysis | Kaggle data download, comprehensive EDA, multi-dimensional visualization |
+Real-world example: Comprehensive exploratory data analysis of Binance USD-M futures data with multi-dimensional visualizations.
+
+<p align="center">
+  <img src="examples/binance-futures-eda.png" alt="Binance Futures EDA Dashboard" width="800">
+</p>
+
+**What it shows:**
+- 3D volume-price-time analysis
+- Correlation heatmaps with dendrograms
+- Rolling statistics and volatility surfaces
+- Cross-pair scatter density plots
+- Performance radar charts and candlestick analysis
 
 ### Try It Yourself
 
 ```bash
-# COVID-19 analysis (requires Kaggle credentials)
-/gyoshu-auto Download kaggle COVID-19 dataset and perform comprehensive EDA
+# Binance futures analysis (API or local data)
+/gyoshu-auto perform comprehensive EDA on binance futures data
 
 # Titanic classification (classic ML workflow)
 /gyoshu-auto analyze Titanic survival data and build classification model

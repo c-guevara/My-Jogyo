@@ -6,7 +6,7 @@ This directory contains worked examples demonstrating Gyoshu's research automati
 
 | Example | Type | Data Source | Key Features |
 |---------|------|-------------|--------------|
-| [01-covid-eda](01-covid-eda/) | Exploratory Data Analysis | Kaggle | Data download, multi-dimensional EDA, visualization |
+| [Binance Futures EDA](binance-futures-eda.png) | Exploratory Data Analysis | Binance API | 3D visualizations, correlation analysis, volatility surfaces |
 
 ## Running Examples
 
@@ -35,8 +35,8 @@ pip install pandas numpy matplotlib seaborn
 
 # Run any of these examples:
 
-# 1. COVID-19 EDA (requires Kaggle credentials)
-/gyoshu-auto Download kaggle COVID-19 dataset and perform comprehensive EDA
+# 1. Binance Futures EDA (API or local data)
+/gyoshu-auto perform comprehensive EDA on binance futures data
 
 # 2. Titanic Classification (sklearn built-in)
 /gyoshu-auto analyze Titanic survival data and build classification model

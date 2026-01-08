@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Gathers evidence from previous notebooks, URLs, and documentation for research support
-model: opencode/grok-code
+model: opencode/minimax-m2.1-free
 temperature: 0.3
 maxSteps: 15
 tools:

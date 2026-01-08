@@ -313,7 +313,7 @@ async function loadManifest(
 
     const validation = validateCheckpointManifest(manifest);
     if (!validation.success) {
-      console.warn(`Invalid manifest at ${manifestPath}:`, validation.error);
+      process.env.GYOSHU_DEBUG && console.warn(`Invalid manifest at ${manifestPath}:`, validation.error);
       return null;
     }
 
@@ -325,10 +325,10 @@ async function loadManifest(
     }
     // ELOOP means symlink was rejected by O_NOFOLLOW
     if (err.code === "ELOOP") {
-      console.warn(`Security: checkpoint manifest is a symlink, rejecting: ${manifestPath}`);
+      process.env.GYOSHU_DEBUG && console.warn(`Security: checkpoint manifest is a symlink, rejecting: ${manifestPath}`);
       return null;
     }
-    console.warn(`Error loading manifest at ${manifestPath}:`, error);
+    process.env.GYOSHU_DEBUG && console.warn(`Error loading manifest at ${manifestPath}:`, error);
     return null;
   }
 }
@@ -1127,7 +1127,7 @@ export const checkpointManager = tool({
           const expectedSha256 = calculateManifestSha256(manifestBase);
 
           if (expectedSha256 !== manifest.manifestSha256) {
-            console.warn(
+            process.env.GYOSHU_DEBUG && console.warn(
               `[checkpoint-manager] Skipping checkpoint ${manifest.checkpointId}: Manifest SHA256 mismatch`
             );
             continue;
@@ -1145,7 +1145,7 @@ export const checkpointManager = tool({
           }
 
           if (!allArtifactsValid) {
-            console.warn(
+            process.env.GYOSHU_DEBUG && console.warn(
               `[checkpoint-manager] Skipping invalid checkpoint ${manifest.checkpointId}: ${issues.join("; ")}`
             );
           }
@@ -1258,7 +1258,7 @@ export const checkpointManager = tool({
               await fs.rm(ckptDir, { recursive: true, force: true });
               prunedIds.push(ckpt.checkpointId);
             } catch (error) {
-              console.warn(
+              process.env.GYOSHU_DEBUG && console.warn(
                 `Failed to prune checkpoint ${ckpt.checkpointId}:`,
                 error
               );
@@ -1424,7 +1424,7 @@ export const checkpointManager = tool({
                 calculateManifestSha256(finalManifestBase);
             } catch (error) {
               // Cell append failed - continue without it (emergency save prioritizes speed)
-              console.warn(
+              process.env.GYOSHU_DEBUG && console.warn(
                 `Emergency checkpoint: Failed to append notebook cell: ${error}`
               );
             }

@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Scientific research agent with Python REPL and structured output markers
-model: opencode/grok-code
+model: opencode/minimax-m2.1-free
 temperature: 0.2
 maxSteps: 50
 tools:

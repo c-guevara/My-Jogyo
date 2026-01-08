@@ -1,7 +1,7 @@
 ---
 mode: subagent
 description: Generates human-readable, narrative research reports from structured context
-model: opencode/grok-code
+model: opencode/minimax-m2.1-free
 temperature: 0.4
 maxSteps: 5
 tools:

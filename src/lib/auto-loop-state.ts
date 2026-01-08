@@ -182,13 +182,13 @@ export async function loadState(reportTitle: string): Promise<AutoLoopState | nu
       typeof state.iteration !== "number" ||
       typeof state.reportTitle !== "string"
     ) {
-      console.warn(`[auto-loop-state] Invalid state file at ${statePath}: missing required fields`);
+      process.env.GYOSHU_DEBUG && console.warn(`[auto-loop-state] Invalid state file at ${statePath}: missing required fields`);
       return null;
     }
 
     return state;
   } catch (error) {
-    console.warn(
+    process.env.GYOSHU_DEBUG && console.warn(
       `[auto-loop-state] Failed to load state from ${statePath}: ${(error as Error).message}`
     );
     return null;

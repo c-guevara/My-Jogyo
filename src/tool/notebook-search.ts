@@ -397,7 +397,7 @@ async function searchNotebook(
       matches.push(...cellMatches);
     }
   } catch (error) {
-    console.warn(`Warning: Could not search notebook ${notebookPath}: ${error}`);
+    process.env.GYOSHU_DEBUG && console.warn(`Warning: Could not search notebook ${notebookPath}: ${error}`);
   }
 
   return matches;
@@ -499,7 +499,7 @@ async function findAllNotebooks(): Promise<DiscoveredNotebook[]> {
     for (const nb of found) {
       // Security: Verify realpath containment for each notebook
       if (!isPathContainedIn(nb.path, rootRealpath, { useRealpath: true })) {
-        console.warn(`Security: Skipping notebook outside root: ${nb.path}`);
+        process.env.GYOSHU_DEBUG && console.warn(`Security: Skipping notebook outside root: ${nb.path}`);
         continue;
       }
 
@@ -541,7 +541,7 @@ async function findAllNotebooks(): Promise<DiscoveredNotebook[]> {
                 
                 // Security: Verify realpath containment for each notebook
                 if (!isPathContainedIn(nbPath, researchRealpath, { useRealpath: true })) {
-                  console.warn(`Security: Skipping notebook outside research dir: ${nbPath}`);
+                  process.env.GYOSHU_DEBUG && console.warn(`Security: Skipping notebook outside research dir: ${nbPath}`);
                   continue;
                 }
 

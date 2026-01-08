@@ -58,14 +58,14 @@ function safeUnlinkSocket(socketPath: string): void {
       fs.unlinkSync(socketPath);
     } else {
       // Not a socket - log and skip (security: don't delete wrong file type)
-      console.warn(`[python-repl] Refusing to unlink non-socket file: ${socketPath}`);
+      process.env.GYOSHU_DEBUG && console.warn(`[python-repl] Refusing to unlink non-socket file: ${socketPath}`);
     }
   } catch (err: unknown) {
     // ENOENT is fine (file doesn't exist)
     // Other errors: skip unlink but don't throw
     const nodeErr = err as NodeJS.ErrnoException;
     if (nodeErr.code !== 'ENOENT') {
-      console.warn(`[python-repl] lstat failed for ${socketPath}: ${nodeErr.message}`);
+      process.env.GYOSHU_DEBUG && console.warn(`[python-repl] lstat failed for ${socketPath}: ${nodeErr.message}`);
     }
   }
 }
@@ -525,7 +525,7 @@ async function writeBridgeMeta(sessionId: string, meta: Partial<BridgeMeta>): Pr
     // Non-critical metadata - log rate-limited then skip
     const now = Date.now();
     if (now - lastWriteSkipLog > WRITE_SKIP_LOG_INTERVAL_MS) {
-      console.warn(`[python-repl] bridge_meta write skipped for ${sessionId} (lock timeout)`);
+      process.env.GYOSHU_DEBUG && console.warn(`[python-repl] bridge_meta write skipped for ${sessionId} (lock timeout)`);
       lastWriteSkipLog = now;
     }
   }
@@ -820,7 +820,7 @@ async function killBridgeWithEscalation(
   }
   
   if (meta.sessionId !== sessionId) {
-    console.warn(`[python-repl] Session ID mismatch in killBridgeWithEscalation: expected ${sessionId}, got ${meta.sessionId}`);
+    process.env.GYOSHU_DEBUG && console.warn(`[python-repl] Session ID mismatch in killBridgeWithEscalation: expected ${sessionId}, got ${meta.sessionId}`);
     await deleteBridgeMeta(sessionId);  // Clean up poisoned meta
     return { terminatedBy: "already_dead", terminationTimeMs: 0 };
   }
@@ -893,7 +893,7 @@ async function killBridgeByShortId(
   }
   
   if (shortenSessionId(meta.sessionId) !== shortId) {
-    console.warn(`[python-repl] Binding mismatch in killBridgeByShortId: expected ${shortId}, got ${shortenSessionId(meta.sessionId)}`);
+    process.env.GYOSHU_DEBUG && console.warn(`[python-repl] Binding mismatch in killBridgeByShortId: expected ${shortId}, got ${shortenSessionId(meta.sessionId)}`);
     await deleteBridgeMetaByShortId(shortId);  // Clean up poisoned meta
     return { terminatedBy: "already_dead", terminationTimeMs: 0 };
   }

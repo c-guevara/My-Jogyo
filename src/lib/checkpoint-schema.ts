@@ -20,7 +20,7 @@
  * @module checkpoint-schema
  */
 
-import { z } from "zod/v4";
+import { z } from "zod";
 
 // =============================================================================
 // ENUM TYPES

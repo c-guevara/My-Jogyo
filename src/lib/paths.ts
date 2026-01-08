@@ -46,7 +46,15 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
-import { readFileNoFollowSync } from "./atomic-write";
+
+function readFileNoFollowSyncLocal(filePath: string): string {
+  const fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    return fs.readFileSync(fd, "utf-8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
 
 // =============================================================================
 // CONSTANTS
@@ -812,8 +820,7 @@ export function getLegacyArtifactsDir(sessionId: string): string {
 export function getConfig(): GyoshuConfig | null {
   const configPath = getConfigPath();
   try {
-    // Security: Use O_NOFOLLOW to atomically reject symlinks (no TOCTOU race)
-    const content = readFileNoFollowSync(configPath);
+    const content = readFileNoFollowSyncLocal(configPath);
     return JSON.parse(content) as GyoshuConfig;
   } catch (err) {
     // ENOENT = doesn't exist, ELOOP = symlink rejected by O_NOFOLLOW

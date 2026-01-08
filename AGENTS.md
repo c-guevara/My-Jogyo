@@ -26,10 +26,10 @@ Gyoshu uses free OpenCode models by default for zero-configuration setup:
 |-------|---------------|------|
 | **Gyoshu** | `opencode/glm-4.7-free` | Research planner |
 | **Baksa** | `opencode/minimax-m2.1-free` | Adversarial verifier |
-| **Jogyo** | `opencode/grok-code` | Research executor |
-| **Jogyo Paper Writer** | `opencode/grok-code` | Report writer |
-| **Jogyo Feedback** | `opencode/grok-code` | Feedback explorer |
-| **Jogyo Insight** | `opencode/grok-code` | Evidence gatherer |
+| **Jogyo** | `opencode/minimax-m2.1-free` | Research executor |
+| **Jogyo Paper Writer** | `opencode/minimax-m2.1-free` | Report writer |
+| **Jogyo Feedback** | `opencode/minimax-m2.1-free` | Feedback explorer |
+| **Jogyo Insight** | `opencode/minimax-m2.1-free` | Evidence gatherer |
 
 ### Recommended Models for Maximum Performance
 

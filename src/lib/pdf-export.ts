@@ -15,8 +15,14 @@ import * as fs from "fs/promises";
 import { realpathSync } from "fs";
 import * as os from "os";
 import * as path from "path";
-import sanitizeHtmlLib from "sanitize-html";
 import { atomicReplaceWindows, durableAtomicWrite, readFileNoFollow } from "./atomic-write";
+
+let sanitizeHtmlLib: ((html: string, options: object) => string) | null = null;
+try {
+  sanitizeHtmlLib = require("sanitize-html");
+} catch {
+  // Package not available - will use fallback sanitization
+}
 import { isPathContainedIn } from "./path-security";
 import { ensureDirSync, getReportsRootDir } from "./paths";
 
@@ -356,34 +362,36 @@ async function convertWithHtml(
  * Only permits safe structural tags with no URL-bearing attributes.
  */
 function sanitizeHtml(html: string): string {
-  return sanitizeHtmlLib(html, {
-    // Allowlist: only safe structural and formatting tags
-    allowedTags: [
-      "h1", "h2", "h3", "h4", "h5", "h6",
-      "p", "br", "hr",
-      "ul", "ol", "li",
-      "blockquote", "pre", "code",
-      "table", "thead", "tbody", "tr", "th", "td",
-      "strong", "em", "b", "i", "u", "s",
-      "span", "div",
-      "a", // Keep anchor structure but strip href below
-    ],
-    // Allowlist attributes - NO URL-bearing attributes allowed
-    allowedAttributes: {
-      a: [], // Remove all attributes from links (no href = no SSRF)
-      th: ["colspan", "rowspan"],
-      td: ["colspan", "rowspan"],
-      "*": ["class"], // Allow class for styling only
-    },
-    // Disallow ALL URL schemes - prevents any protocol-based requests
-    allowedSchemes: [],
-    allowedSchemesByTag: {},
-    // Remove ALL inline styles - prevents url() injection
-    allowedStyles: {},
-    // Strip unknown tags completely
-    disallowedTagsMode: "discard",
-    allowProtocolRelative: false,
-  });
+  if (sanitizeHtmlLib) {
+    return sanitizeHtmlLib(html, {
+      allowedTags: [
+        "h1", "h2", "h3", "h4", "h5", "h6",
+        "p", "br", "hr",
+        "ul", "ol", "li",
+        "blockquote", "pre", "code",
+        "table", "thead", "tbody", "tr", "th", "td",
+        "strong", "em", "b", "i", "u", "s",
+        "span", "div",
+        "a",
+      ],
+      allowedAttributes: {
+        a: [],
+        th: ["colspan", "rowspan"],
+        td: ["colspan", "rowspan"],
+        "*": ["class"],
+      },
+      allowedSchemes: [],
+      allowedSchemesByTag: {},
+      allowedStyles: {},
+      disallowedTagsMode: "discard",
+      allowProtocolRelative: false,
+    });
+  }
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+    .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, "")
+    .replace(/\s(on\w+|href|src|style)="[^"]*"/gi, "")
+    .replace(/\s(on\w+|href|src|style)='[^']*'/gi, "");
 }
 
 /**

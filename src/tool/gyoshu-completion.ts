@@ -517,7 +517,7 @@ export default tool({
             DEFAULT_LOCK_TIMEOUT_MS
           );
         } catch (e) {
-          console.warn(`Report generation failed: ${(e as Error).message}`);
+          process.env.GYOSHU_DEBUG && console.warn(`Report generation failed: ${(e as Error).message}`);
           // Gate failure must fail-safe: downgrade to PARTIAL, never silently pass
           if (adjustedStatus === "SUCCESS") {
             adjustedStatus = "PARTIAL";

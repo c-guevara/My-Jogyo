@@ -1,6 +1,6 @@
 {
   "name": "gyoshu",
-  "version": "0.4.16",
+  "version": "0.4.30",
   "description": "Scientific research agent extension for OpenCode",
   "files": {
     "agent": [
@@ -59,6 +59,6 @@
     "bridge": [
       "gyoshu_bridge.py"
     ],
-    "plugin": []
+    "plugin": ["gyoshu-hooks.ts"]
   }
 }
