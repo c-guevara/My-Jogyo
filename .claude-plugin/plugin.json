@@ -1,0 +1,25 @@
+{
+  "name": "gyoshu",
+  "version": "0.4.33",
+  "description": "Scientific research agent extension - turns research goals into reproducible Jupyter notebooks with Python REPL, data analysis, and ML workflows",
+  "author": {
+    "name": "Yeachan Heo",
+    "email": "hurrc04@gmail.com",
+    "url": "https://github.com/Yeachan-Heo"
+  },
+  "homepage": "https://github.com/Yeachan-Heo/My-Jogyo#readme",
+  "repository": "https://github.com/Yeachan-Heo/My-Jogyo",
+  "license": "MIT",
+  "keywords": [
+    "research",
+    "jupyter",
+    "python",
+    "data-science",
+    "machine-learning",
+    "scientific",
+    "repl",
+    "notebook",
+    "automation",
+    "multi-agent"
+  ]
+}

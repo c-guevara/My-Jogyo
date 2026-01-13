@@ -1,0 +1,24 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "gyoshu",
+  "description": "Scientific research agent extension - turns research goals into reproducible Jupyter notebooks with Python REPL, data analysis, and ML workflows",
+  "owner": {
+    "name": "Yeachan Heo",
+    "email": "hurrc04@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "gyoshu",
+      "description": "Scientific research automation with Python REPL, Jupyter notebooks, and multi-agent research workflows. Includes 6 agents, 2 commands, 10 tools, and 3 skills for data science and machine learning research.",
+      "version": "0.4.33",
+      "author": {
+        "name": "Yeachan Heo",
+        "email": "hurrc04@gmail.com"
+      },
+      "source": "./",
+      "category": "productivity",
+      "homepage": "https://github.com/Yeachan-Heo/My-Jogyo",
+      "tags": ["research", "jupyter", "python", "data-science", "machine-learning", "scientific", "repl", "notebook", "automation"]
+    }
+  ]
+}
