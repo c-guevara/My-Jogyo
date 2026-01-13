@@ -5,6 +5,24 @@ All notable changes to Gyoshu (My-Jogyo) will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-01-13
+
+### Added
+
+- **Claude Code MCP Server** - Full Model Context Protocol support for Claude Code integration
+  - 12 research tools exposed via MCP: `python_repl`, `research_manager`, `session_manager`, `notebook_writer`, `gyoshu_completion`, `gyoshu_snapshot`, `notebook_search`, `checkpoint_manager`, `retrospective_store`, `migration_tool`, `parallel_manager`, `session_structure_validator`
+  - esbuild bundler for single-file distribution (`src/mcp/build/index.cjs`)
+  - Session-scoped stage ID normalization for checkpoint validation
+  - Bridge metadata persistence for notebook path resolution
+  - SHA256 manifest integrity verification
+
+### Changed
+
+- README updated with Claude Code installation instructions (now Option 1)
+- Requirements now include Node.js 18+ for MCP server
+
+---
+
 ## [0.2.0] - 2025-01-05
 
 ### Added

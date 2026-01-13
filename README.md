@@ -47,7 +47,39 @@ Think of it like a research lab:
 
 ## 🚀 Installation
 
-### Option 1: OpenCode Plugin (Recommended)
+### Option 1: Claude Code (MCP Server)
+
+Gyoshu works with Claude Code via the Model Context Protocol (MCP). Install in one command:
+
+```bash
+# Clone and build the MCP server
+git clone https://github.com/Yeachan-Heo/My-Jogyo.git
+cd My-Jogyo/src/mcp
+npm install && npm run build
+
+# Register with Claude Code
+claude mcp add gyoshu-mcp "$(pwd)/build/index.cjs"
+```
+
+**Verify installation:**
+```bash
+claude mcp list
+# Should show: gyoshu-mcp: ✓ Connected
+```
+
+**Available MCP Tools:**
+| Tool | Purpose |
+|------|---------|
+| `python_repl` | Execute Python code with marker detection |
+| `research_manager` | Create/manage research sessions |
+| `gyoshu_snapshot` | Capture research state snapshots |
+| `checkpoint_manager` | Save/restore research checkpoints |
+| `notebook_writer` | Jupyter notebook operations |
+| `notebook_search` | Search across notebooks |
+
+> **Note:** The MCP server exposes 12 research tools. See [src/mcp/](src/mcp/) for details.
+
+### Option 2: OpenCode Plugin
 
 Add Gyoshu to your `opencode.json`:
 
@@ -59,7 +91,7 @@ Add Gyoshu to your `opencode.json`:
 
 That's it! OpenCode will auto-install Gyoshu from npm on next startup.
 
-### Option 2: CLI Installer
+### Option 3: CLI Installer
 
 ```bash
 # Using bunx (no global install needed)
@@ -104,9 +136,11 @@ opencode
 
 ## 🤖 Installation for LLMs
 
-> *Using Claude, GPT, Gemini, or another AI assistant with OpenCode? This section is for you.*
+> *Using Claude Code, OpenCode, or another AI coding assistant? This section is for you.*
 
-**Setup is the same** — run `bunx gyoshu install` or add `"gyoshu"` to your plugin array. Then give your LLM the context it needs:
+**For Claude Code:** Install the MCP server (Option 1 above). The tools are automatically available.
+
+**For OpenCode:** Run `bunx gyoshu install` or add `"gyoshu"` to your plugin array. Then give your LLM the context it needs:
 
 1. **Point your LLM to the guide:**
    > "Read `AGENTS.md` in the Gyoshu directory for full context on how to use the research tools."
@@ -369,8 +403,9 @@ python3 -m venv .venv
 
 ## 🛠️ Requirements
 
-- **OpenCode** v0.1.0+
-- **Python** 3.10+ 
+- **Claude Code** or **OpenCode** v0.1.0+
+- **Python** 3.10+
+- **Node.js** 18+ (for MCP server)
 - **Optional**: `psutil` (for memory tracking)
 
 ### Supported Platforms
