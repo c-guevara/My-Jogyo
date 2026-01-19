@@ -1,6 +1,6 @@
 {
   "name": "@gyoshu/mcp-server",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Gyoshu MCP Server - Scientific research tools for Claude Code",
   "type": "module",
   "main": "./build/index.cjs",
